@@ -25,3 +25,16 @@ go build -o bin/webmux ./cmd/webmux
 ./bin/webmux --listen 127.0.0.1:7681 --token YOUR_TOKEN
 curl -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:7681/api/health
 ```
+
+## 前端开发
+
+```sh
+cd web
+pnpm install --frozen-lockfile
+pnpm build
+pnpm dev
+```
+
+Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。开发配置需设置 `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被服务端安全校验拒绝。生产构建不需要此开发 Origin。
+
+前端使用 Preact、TypeScript、xterm 5；WebGL 不可用或丢失上下文时回退 xterm 内置 DOM 渲染器（允许的依赖列表没有 canvas addon）。欢迎页通过 WebSocket 更新，终端重连清屏后全量回放。追加参数按 argv 引号规则拆分，不通过 shell 执行。

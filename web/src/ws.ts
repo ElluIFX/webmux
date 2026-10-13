@@ -1,0 +1,74 @@
+import { stored } from "./api";
+export type Connection =
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "exited"
+  | "missing";
+export function connect(
+  path: string,
+  onMessage: (data: string | ArrayBuffer) => void,
+  onState: (state: Connection) => void,
+) {
+  let socket: WebSocket | undefined,
+    timer: number | undefined,
+    attempt = 0,
+    disposed = false,
+    finished = false;
+  function open() {
+    if (disposed || finished) return;
+    clearTimeout(timer);
+    const previous = socket;
+    socket = undefined;
+    previous?.close();
+    onState(attempt ? "reconnecting" : "connecting");
+    const next = new WebSocket(
+      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}?token=${encodeURIComponent(stored("token"))}`,
+    );
+    socket = next;
+    next.binaryType = "arraybuffer";
+    next.onopen = () => {
+      if (socket !== next) return;
+      attempt = 0;
+      onState("connected");
+    };
+    next.onmessage = (event) => {
+      if (socket === next) onMessage(event.data as string | ArrayBuffer);
+    };
+    next.onclose = (event) => {
+      if (socket !== next || disposed) return;
+      if (event.code === 4410 || event.code === 4404) {
+        finished = true;
+        onState(event.code === 4410 ? "exited" : "missing");
+        return;
+      }
+      onState("reconnecting");
+      const delay =
+        event.code === 4408 ? 0 : Math.min(8000, 500 * 2 ** attempt++);
+      timer = window.setTimeout(open, delay);
+    };
+    next.onerror = () => next.close();
+  }
+  const visible = () => {
+    if (!document.hidden && socket?.readyState !== WebSocket.OPEN) open();
+  };
+  document.addEventListener("visibilitychange", visible);
+  open();
+  return {
+    send(kind: number, payload: Uint8Array) {
+      if (socket?.readyState !== WebSocket.OPEN) return false;
+      const frame = new Uint8Array(payload.length + 1);
+      frame[0] = kind;
+      frame.set(payload, 1);
+      socket.send(frame);
+      return true;
+    },
+    close() {
+      disposed = true;
+      clearTimeout(timer);
+      socket?.close();
+      document.removeEventListener("visibilitychange", visible);
+    },
+    reconnect: open,
+  };
+}
