@@ -3,13 +3,14 @@ package config
 import (
 	"errors"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/rainchan/webmux/internal/session"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/rainchan/webmux/internal/session"
 )
 
 type Config struct {
@@ -29,7 +30,21 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "webmux", "config.toml")
 }
 func Load(path string, required bool) (Config, error) {
-	c := Config{Listen: "127.0.0.1:7681", ScrollbackBytes: 2097152, DefaultCwd: "~", IdleAfterSeconds: 30, PromptPatterns: []string{`[$#%>❯›?:]\s*$`, `(?i)\(y/n\)|\[y/n\]|yes.*no|press enter`}, Presets: []session.Preset{{Name: "shell", Label: "Shell", Cmd: []string{}}, {Name: "claude", Label: "Claude Code", Cmd: []string{"claude"}, AllowArgs: true}, {Name: "codex", Label: "Codex CLI", Cmd: []string{"codex"}, AllowArgs: true}}}
+	c := Config{
+		Listen:           "127.0.0.1:7681",
+		ScrollbackBytes:  2097152,
+		DefaultCwd:       "~",
+		IdleAfterSeconds: 30,
+		PromptPatterns: []string{
+			`[$#%>❯›?:]\s*$`,
+			`(?i)\(y/n\)|\[y/n\]|yes.*no|press enter`,
+		},
+		Presets: []session.Preset{
+			{Name: "shell", Label: "Shell", Cmd: []string{}},
+			{Name: "claude", Label: "Claude Code", Cmd: []string{"claude"}, AllowArgs: true},
+			{Name: "codex", Label: "Codex CLI", Cmd: []string{"codex"}, AllowArgs: true},
+		},
+	}
 	if _, err := toml.DecodeFile(path, &c); err != nil {
 		if required || !errors.Is(err, os.ErrNotExist) {
 			return c, err
@@ -77,5 +92,11 @@ func (c *Config) Validate() error {
 	return nil
 }
 func (c Config) SessionOptions() session.Options {
-	return session.Options{ScrollbackBytes: c.ScrollbackBytes, DefaultCwd: c.DefaultCwd, Presets: c.Presets, IdleAfter: time.Duration(c.IdleAfterSeconds) * time.Second, PromptPatterns: c.PromptPatterns}
+	return session.Options{
+		ScrollbackBytes: c.ScrollbackBytes,
+		DefaultCwd:      c.DefaultCwd,
+		Presets:         c.Presets,
+		IdleAfter:       time.Duration(c.IdleAfterSeconds) * time.Second,
+		PromptPatterns:  c.PromptPatterns,
+	}
 }

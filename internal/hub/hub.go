@@ -71,7 +71,12 @@ func Attach(ctx context.Context, s *session.Session, c *websocket.Conn) {
 			}
 		}
 	}()
-	defer func() { cancel(); _ = c.CloseNow(); <-readerDone; <-inputDone }()
+	defer func() {
+		cancel()
+		_ = c.CloseNow()
+		<-readerDone
+		<-inputDone
+	}()
 	var pending []byte
 	var combinedBuffer []byte
 	for {
@@ -133,7 +138,10 @@ func List(ctx context.Context, m *session.Manager, c *websocket.Conn) {
 	sub := m.Subscribe()
 	defer m.Unsubscribe(sub)
 	reader := c.CloseRead(ctx)
-	defer func() { cancel(); _ = c.CloseNow() }()
+	defer func() {
+		cancel()
+		_ = c.CloseNow()
+	}()
 	for {
 		select {
 		case <-reader.Done():

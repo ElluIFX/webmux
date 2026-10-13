@@ -25,7 +25,12 @@ func startPTY(cmd *exec.Cmd, size *pty.Winsize) (*os.File, error) {
 	}
 	return f, err
 }
-func releaseLeader(pid int) { leaderMu.Lock(); delete(managedLeaders, pid); leaderMu.Unlock() }
+
+func releaseLeader(pid int) {
+	leaderMu.Lock()
+	delete(managedLeaders, pid)
+	leaderMu.Unlock()
+}
 
 // A zombie has no usable environ. Reap adopted children regardless of terminal
 // SID or environment marker, but never take a managed leader's Wait result.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/creack/pty"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 type Status string
@@ -79,7 +80,27 @@ func start(id, cwd, preset, name string, argv []string, capacity int) (*Session,
 	}
 	f = pollable
 	now := time.Now()
-	s := &Session{info: Info{ID: id, Title: filepath.Base(cwd), Cwd: cwd, Preset: preset, Cmd: append([]string(nil), argv...), Status: StatusRunning, CreatedAt: now, LastActiveAt: now, Cols: 80, Rows: 24}, userTitle: name, terminal: f, cmd: cmd, ring: NewRingBuffer(capacity), subs: make(map[*Subscriber]struct{}), done: make(chan struct{}), readerDone: make(chan struct{})}
+	s := &Session{
+		info: Info{
+			ID:           id,
+			Title:        filepath.Base(cwd),
+			Cwd:          cwd,
+			Preset:       preset,
+			Cmd:          append([]string(nil), argv...),
+			Status:       StatusRunning,
+			CreatedAt:    now,
+			LastActiveAt: now,
+			Cols:         80,
+			Rows:         24,
+		},
+		userTitle:  name,
+		terminal:   f,
+		cmd:        cmd,
+		ring:       NewRingBuffer(capacity),
+		subs:       make(map[*Subscriber]struct{}),
+		done:       make(chan struct{}),
+		readerDone: make(chan struct{}),
+	}
 	s.inputGate = make(chan struct{}, 1)
 	s.inputGate <- struct{}{}
 	s.cleanupDone = make(chan struct{})
@@ -90,7 +111,13 @@ func start(id, cwd, preset, name string, argv []string, capacity int) (*Session,
 	go s.wait()
 	return s, nil
 }
-func (s *Session) Info() Info { s.mu.Lock(); defer s.mu.Unlock(); return s.infoLocked() }
+
+func (s *Session) Info() Info {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.infoLocked()
+}
+
 func (s *Session) infoLocked() Info {
 	i := s.info
 	i.Clients = len(s.subs)

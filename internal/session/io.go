@@ -60,7 +60,10 @@ func (s *Session) WriteContext(ctx context.Context, p []byte) error {
 		return err
 	}
 	cancelled := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { _ = s.terminal.SetWriteDeadline(time.Now()); close(cancelled) })
+	stop := context.AfterFunc(ctx, func() {
+		_ = s.terminal.SetWriteDeadline(time.Now())
+		close(cancelled)
+	})
 	_, err := s.terminal.Write(p)
 	if !stop() {
 		<-cancelled

@@ -65,7 +65,12 @@ func NewManager(o Options) *Manager {
 	if o.PromptPatterns == nil {
 		o.PromptPatterns = []string{`[$#%>❯›?:]\s*$`, `(?i)\(y/n\)|\[y/n\]|yes.*no|press enter`}
 	}
-	m := &Manager{sessions: make(map[string]*Session), subs: make(map[*ListSubscriber]struct{}), options: o, done: make(chan struct{})}
+	m := &Manager{
+		sessions: make(map[string]*Session),
+		subs:     make(map[*ListSubscriber]struct{}),
+		options:  o,
+		done:     make(chan struct{}),
+	}
 	m.initErr = enableReaper()
 	for _, pattern := range o.PromptPatterns {
 		m.patterns = append(m.patterns, regexp.MustCompile(pattern))
@@ -143,7 +148,13 @@ func (m *Manager) Get(id string) (*Session, error) {
 	}
 	return s, nil
 }
-func (m *Manager) List() []Info { m.mu.Lock(); defer m.mu.Unlock(); return m.listLocked() }
+
+func (m *Manager) List() []Info {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listLocked()
+}
+
 func (m *Manager) listLocked() []Info {
 	list := make([]Info, 0, len(m.sessions))
 	for _, s := range m.sessions {
