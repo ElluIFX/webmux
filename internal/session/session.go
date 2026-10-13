@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/creack/pty"
@@ -43,23 +44,23 @@ type Subscriber struct {
 	failed bool
 }
 type Session struct {
-	mu         sync.Mutex
-	inputMu    sync.Mutex
-	info       Info
-	userTitle  string
-	terminal   *os.File
-	cmd        *exec.Cmd
-	ring       *RingBuffer
-	osc        OSCScanner
-	preview    Preview
-	subs       map[*Subscriber]struct{}
-	done       chan struct{}
-	readerDone chan struct{}
-	closeOnce  sync.Once
-	notify     func()
+	mu          sync.Mutex
+	inputGate   chan struct{}
+	info        Info
+	userTitle   string
+	terminal    *os.File
+	cmd         *exec.Cmd
+	ring        *RingBuffer
+	osc         OSCScanner
+	preview     Preview
+	subs        map[*Subscriber]struct{}
+	done        chan struct{}
+	readerDone  chan struct{}
+	cleanupDone chan struct{}
+	closeOnce   sync.Once
 }
 
-func start(id, cwd, preset, name string, argv []string, capacity int, notify func()) (*Session, error) {
+func start(id, cwd, preset, name string, argv []string, capacity int) (*Session, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "WEBMUX_SESSION_ID="+id)
@@ -67,8 +68,19 @@ func start(id, cwd, preset, name string, argv []string, capacity int, notify fun
 	if err != nil {
 		return nil, err
 	}
+	pollable, err := pollablePTY(f)
+	if err != nil {
+		_ = f.Close()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		return nil, err
+	}
+	f = pollable
 	now := time.Now()
-	s := &Session{info: Info{ID: id, Title: filepath.Base(cwd), Cwd: cwd, Preset: preset, Cmd: append([]string(nil), argv...), Status: StatusRunning, CreatedAt: now, LastActiveAt: now, Cols: 80, Rows: 24}, userTitle: name, terminal: f, cmd: cmd, ring: NewRingBuffer(capacity), subs: make(map[*Subscriber]struct{}), done: make(chan struct{}), readerDone: make(chan struct{}), notify: notify}
+	s := &Session{info: Info{ID: id, Title: filepath.Base(cwd), Cwd: cwd, Preset: preset, Cmd: append([]string(nil), argv...), Status: StatusRunning, CreatedAt: now, LastActiveAt: now, Cols: 80, Rows: 24}, userTitle: name, terminal: f, cmd: cmd, ring: NewRingBuffer(capacity), subs: make(map[*Subscriber]struct{}), done: make(chan struct{}), readerDone: make(chan struct{})}
+	s.inputGate = make(chan struct{}, 1)
+	s.inputGate <- struct{}{}
+	s.cleanupDone = make(chan struct{})
 	if name != "" {
 		s.info.Title = name
 	}
@@ -123,7 +135,6 @@ func (s *Session) Attach() *Subscriber {
 	s.subs[sub] = struct{}{}
 	s.replayLocked(sub)
 	s.mu.Unlock()
-	s.notify()
 	return sub
 }
 func (s *Session) replayLocked(sub *Subscriber) {
@@ -150,18 +161,9 @@ func (s *Session) Detach(sub *Subscriber) {
 	s.mu.Lock()
 	delete(s.subs, sub)
 	s.mu.Unlock()
-	s.notify()
 }
 func (s *Session) Write(p []byte) error {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
-	select {
-	case <-s.done:
-		return errors.New("session exited")
-	default:
-	}
-	_, err := s.terminal.Write(p)
-	return err
+	return s.WriteContext(context.Background(), p)
 }
 func (s *Session) Resize(cols, rows uint16) error {
 	if cols == 0 || rows == 0 || cols > 1000 || rows > 1000 {
@@ -174,7 +176,6 @@ func (s *Session) Resize(cols, rows uint16) error {
 		s.info.Rows = rows
 	}
 	s.mu.Unlock()
-	s.notify()
 	return err
 }
 func (s *Session) read() {
@@ -197,9 +198,10 @@ func (s *Session) read() {
 			s.info.LastLine = s.preview.Feed(p)
 			s.info.LastActiveAt = time.Now()
 			s.info.Status = StatusRunning
-			s.broadcastLocked(Frame(0, p))
+			if len(s.subs) > 0 {
+				s.broadcastLocked(Frame(0, p))
+			}
 			s.mu.Unlock()
-			s.notify()
 		}
 		if err != nil {
 			return
@@ -217,7 +219,8 @@ func (s *Session) wait() {
 			}
 		}
 	} // Drain final PTY bytes before publishing exit.
-	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
+	s.Close()
+	<-s.cleanupDone
 	select {
 	case <-s.readerDone:
 	case <-time.After(time.Second):
@@ -233,26 +236,14 @@ func (s *Session) wait() {
 	s.broadcastLocked(Frame(3, data))
 	close(s.done)
 	s.mu.Unlock()
-	s.notify()
 	slog.Info("session exited", "id", s.info.ID, "exitCode", code)
 }
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		exited := s.info.ExitCode != nil
-		s.mu.Unlock()
-		if exited {
-			return
-		}
 		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
 		go func() {
-			timer := time.NewTimer(5 * time.Second)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
-			case <-s.done:
-			}
+			defer close(s.cleanupDone)
+			cleanupProcesses(s.cmd.Process.Pid, s.info.ID)
 		}()
 	})
 }

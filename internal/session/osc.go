@@ -25,11 +25,12 @@ func (s *OSCScanner) Feed(p []byte, title func(string)) {
 				s.state = 0
 			}
 		case 2:
-			if b == 7 {
+			switch b {
+			case 7:
 				s.finish(title)
-			} else if b == 27 {
+			case 27:
 				s.state = 3
-			} else {
+			default:
 				s.append(b)
 			}
 		case 3:

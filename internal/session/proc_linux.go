@@ -12,6 +12,8 @@ import (
 type processState struct {
 	ppid  int
 	state byte
+	sid   int
+	start uint64
 }
 type processTable map[int]processState
 
@@ -36,12 +38,14 @@ func processes() processTable {
 			continue
 		}
 		fields := strings.Fields(string(data[end+1:]))
-		if len(fields) < 2 || len(fields[0]) != 1 {
+		if len(fields) < 20 || len(fields[0]) != 1 {
 			continue
 		}
 		ppid, err := strconv.Atoi(fields[1])
-		if err == nil {
-			table[pid] = processState{ppid, fields[0][0]}
+		sid, sidErr := strconv.Atoi(fields[3])
+		start, startErr := strconv.ParseUint(fields[19], 10, 64)
+		if err == nil && sidErr == nil && startErr == nil {
+			table[pid] = processState{ppid: ppid, state: fields[0][0], sid: sid, start: start}
 		}
 	}
 	return table

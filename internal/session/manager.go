@@ -46,10 +46,10 @@ type Manager struct {
 	subs     map[*ListSubscriber]struct{}
 	options  Options
 	patterns []*regexp.Regexp
-	dirty    chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
 	stopped  bool
+	initErr  error
 }
 
 var ErrNotFound = errors.New("session not found")
@@ -65,7 +65,8 @@ func NewManager(o Options) *Manager {
 	if o.PromptPatterns == nil {
 		o.PromptPatterns = []string{`[$#%>❯›?:]\s*$`, `(?i)\(y/n\)|\[y/n\]|yes.*no|press enter`}
 	}
-	m := &Manager{sessions: make(map[string]*Session), subs: make(map[*ListSubscriber]struct{}), options: o, dirty: make(chan struct{}, 1), done: make(chan struct{})}
+	m := &Manager{sessions: make(map[string]*Session), subs: make(map[*ListSubscriber]struct{}), options: o, done: make(chan struct{})}
+	m.initErr = enableReaper()
 	for _, pattern := range o.PromptPatterns {
 		m.patterns = append(m.patterns, regexp.MustCompile(pattern))
 	}
@@ -83,6 +84,9 @@ func ExpandPath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 func (m *Manager) Create(cwd, preset string, args []string, name string) (*Session, error) {
+	if m.initErr != nil {
+		return nil, fmt.Errorf("process reaper: %w", m.initErr)
+	}
 	if cwd == "" {
 		cwd = m.options.DefaultCwd
 	}
@@ -120,7 +124,7 @@ func (m *Manager) Create(cwd, preset string, args []string, name string) (*Sessi
 	if m.stopped {
 		return nil, errors.New("server is shutting down")
 	}
-	s, err := start(id, cwd, preset, name, argv, m.options.ScrollbackBytes, m.markDirty)
+	s, err := start(id, cwd, preset, name, argv, m.options.ScrollbackBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -129,12 +133,6 @@ func (m *Manager) Create(cwd, preset string, args []string, name string) (*Sessi
 	m.publishLocked(Event{Type: "created", Session: &info})
 	slog.Info("session created", "id", id, "preset", preset)
 	return s, nil
-}
-func (m *Manager) markDirty() {
-	select {
-	case m.dirty <- struct{}{}:
-	default:
-	}
 }
 func (m *Manager) Get(id string) (*Session, error) {
 	m.mu.Lock()
@@ -207,29 +205,22 @@ func (m *Manager) updates() {
 	defer timer.Stop()
 	previous := make(map[string]Info)
 	lineSent := make(map[string]time.Time)
-	lastProbe := time.Time{}
-	dirty := false
+	var table processTable
+	probeTick := false
 	for {
 		select {
 		case <-m.done:
 			return
-		case <-m.dirty:
-			dirty = true
 		case now := <-timer.C:
-			probe := now.Sub(lastProbe) >= time.Second
-			if !dirty && !probe {
-				continue
-			}
-			var table processTable
-			if probe {
+			probeTick = !probeTick
+			if probeTick {
 				table = processes()
-				lastProbe = now
 			}
 			m.mu.Lock()
 			for id, s := range m.sessions {
-				if probe {
-					s.evaluate(now, table, m.options.IdleAfter, m.patterns)
-				}
+				// Classify every 500 ms using the once-per-second process table.
+				// This leaves headroom for delivering the 3-second waiting signal.
+				s.evaluate(now, table, m.options.IdleAfter, m.patterns)
 				info := s.Info()
 				old, known := previous[id]
 				if known && now.Sub(lineSent[id]) < 2*time.Second {
@@ -251,7 +242,6 @@ func (m *Manager) updates() {
 				}
 			}
 			m.mu.Unlock()
-			dirty = false
 		}
 	}
 }
@@ -270,9 +260,8 @@ func (m *Manager) Shutdown(ctx context.Context) {
 		select {
 		case <-s.Done():
 		case <-ctx.Done():
-			_ = syscallKill(s)
+			forceSession(s.cmd.Process.Pid, s.info.ID)
 		}
 	}
 	m.stopOnce.Do(func() { close(m.done) })
 }
-func syscallKill(s *Session) error { return killGroup(s.cmd.Process.Pid) }

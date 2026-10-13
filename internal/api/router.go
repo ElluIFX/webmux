@@ -100,7 +100,11 @@ func (s *Server) authorized(r *http.Request) bool {
 	if s.Config.Token == "" {
 		return true
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	token := ""
+	scheme, credential, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	if found && strings.EqualFold(scheme, "Bearer") {
+		token = credential
+	}
 	if token == "" {
 		if cookie, err := r.Cookie("webmux_token"); err == nil {
 			token = cookie.Value
@@ -273,7 +277,7 @@ func (s *Server) terminalWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	root, err := fs.Sub(assets.Assets, "dist")
 	if err != nil {
-		http.Error(w, "frontend build unavailable", 503)
+		http.Error(w, "frontend build unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
@@ -294,7 +298,7 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 		data, err = fs.ReadFile(root, name)
 	}
 	if err != nil {
-		http.Error(w, "run make web before building", 503)
+		http.Error(w, "run make web before building", http.StatusServiceUnavailable)
 		return
 	}
 	switch path.Ext(name) {

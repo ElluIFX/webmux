@@ -55,26 +55,37 @@ func run() error {
 	if (host == "0.0.0.0" || host == "::" || host == "") && c.Token == "" {
 		slog.Warn("SHELL EXPOSED: listening on all interfaces without token; isolate with Tailscale/WireGuard")
 	}
-	m := session.NewManager(c.SessionOptions())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: api.New(c, m), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	m := session.NewManager(c.SessionOptions())
+	server := &http.Server{
+		Handler:           api.New(c, m),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
 	ended := make(chan error, 1)
 	go func() { ended <- server.Serve(listener) }()
 	slog.Info("webmux listening", "address", listener.Addr(), "version", version)
 	select {
 	case <-ctx.Done():
 	case err = <-ended:
-		if err != http.ErrServerClosed {
-			return err
-		}
 	}
+	stop() // Cancel HTTP and hijacked WebSocket handlers before joining sessions.
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	m.Shutdown(shutdown)
-	return server.Shutdown(shutdown)
+	if shutdownErr := server.Shutdown(shutdown); shutdownErr != nil {
+		_ = server.Close()
+		slog.Warn("forced HTTP shutdown", "error", shutdownErr)
+	}
+	if err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
 }

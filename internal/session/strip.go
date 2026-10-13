@@ -7,26 +7,25 @@ import (
 
 // Preview ignores split CSI/OSC sequences and retains a bounded printable line.
 type Preview struct {
-	state   byte
-	line    []rune
-	pending []byte
-	last    string
+	state      byte
+	line       []rune
+	pending    [utf8.UTFMax]byte
+	pendingLen int
+	last       string
 }
 
 func (s *Preview) Feed(p []byte) string {
-	var clean []byte
 	for _, b := range p {
 		switch s.state {
 		case 0:
 			if b == 27 {
 				s.state = 1
 			} else if b == '\n' || b == '\r' {
-				s.consume(clean)
-				clean = nil
+				s.pendingLen = 0
 				s.save()
 				s.line = s.line[:0]
-			} else if b >= 32 || b == '\t' || b >= 128 {
-				clean = append(clean, b)
+			} else if b >= 32 || b == '\t' {
+				s.consumeByte(b)
 			}
 		case 1:
 			switch b {
@@ -44,9 +43,10 @@ func (s *Preview) Feed(p []byte) string {
 				s.state = 0
 			}
 		case 3:
-			if b == 7 {
+			switch b {
+			case 7:
 				s.state = 0
-			} else if b == 27 {
+			case 27:
 				s.state = 4
 			}
 		case 4:
@@ -59,28 +59,31 @@ func (s *Preview) Feed(p []byte) string {
 			s.state = 0
 		}
 	}
-	s.consume(clean)
 	s.save()
 	return s.last
 }
-func (s *Preview) consume(p []byte) {
-	s.pending = append(s.pending, p...)
-	for len(s.pending) > 0 {
-		if !utf8.FullRune(s.pending) {
-			break
-		}
-		r, n := utf8.DecodeRune(s.pending)
+func (s *Preview) consumeByte(b byte) {
+	if s.pendingLen == 0 && b < utf8.RuneSelf {
+		s.appendRune(rune(b))
+		return
+	}
+	s.pending[s.pendingLen] = b
+	s.pendingLen++
+	for s.pendingLen > 0 && utf8.FullRune(s.pending[:s.pendingLen]) {
+		r, n := utf8.DecodeRune(s.pending[:s.pendingLen])
+		s.appendRune(r)
+		copy(s.pending[:], s.pending[n:s.pendingLen])
+		s.pendingLen -= n
+	}
+}
+func (s *Preview) appendRune(r rune) {
+	if len(s.line) < 120 {
 		s.line = append(s.line, r)
-		s.pending = s.pending[n:]
-		if len(s.line) > 240 {
-			s.line = s.line[len(s.line)-240:]
-		}
 	}
 }
 func (s *Preview) save() {
 	text := strings.TrimSpace(string(s.line))
 	if text != "" {
-		r := []rune(text)
-		s.last = string(r[:min(120, len(r))])
+		s.last = text
 	}
 }

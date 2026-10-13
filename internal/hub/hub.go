@@ -21,6 +21,22 @@ func Attach(ctx context.Context, s *session.Session, c *websocket.Conn) {
 	defer s.Detach(sub)
 	c.SetReadLimit(1024 * 1024)
 	readerDone := make(chan struct{})
+	inputDone := make(chan struct{})
+	input := make(chan []byte, 16)
+	go func() {
+		defer close(inputDone)
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case p := <-input:
+				if s.WriteContext(ctx, p) != nil {
+					return
+				}
+			}
+		}
+	}()
 	go func() {
 		defer close(readerDone)
 		defer cancel()
@@ -34,7 +50,12 @@ func Attach(ctx context.Context, s *session.Session, c *websocket.Conn) {
 			}
 			switch p[0] {
 			case 0:
-				if err = s.Write(p[1:]); err != nil {
+				select {
+				case input <- p[1:]:
+				case <-ctx.Done():
+					return
+				default:
+					cancel()
 					return
 				}
 			case 1:
@@ -50,7 +71,7 @@ func Attach(ctx context.Context, s *session.Session, c *websocket.Conn) {
 			}
 		}
 	}()
-	defer func() { cancel(); _ = c.CloseNow(); <-readerDone }()
+	defer func() { cancel(); _ = c.CloseNow(); <-readerDone; <-inputDone }()
 	var pending []byte
 	for {
 		var frame []byte

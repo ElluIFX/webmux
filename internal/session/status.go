@@ -39,7 +39,9 @@ func (s *Session) evaluate(now time.Time, table processTable, idleAfter time.Dur
 func (s *Session) publishState() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.broadcastLocked(s.stateLocked())
+	if len(s.subs) > 0 {
+		s.broadcastLocked(s.stateLocked())
+	}
 }
 func sameDisplay(a, b Info) bool {
 	return a.Title == b.Title && a.Status == b.Status && a.LastLine == b.LastLine && a.LastActiveAt.Equal(b.LastActiveAt) && a.Cols == b.Cols && a.Rows == b.Rows && a.Clients == b.Clients && sameExit(a.ExitCode, b.ExitCode)
