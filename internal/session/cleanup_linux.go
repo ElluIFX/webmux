@@ -29,6 +29,7 @@ func enableReaper() error {
 // Own the adopted descendants so killing a shell never leaves zombies to PID 1.
 func cleanupProcesses(pid int, id string) {
 	table := processes()
+	reapAdopted(table)
 	targets := make(map[int]uint64)
 	marker := []byte("WEBMUX_SESSION_ID=" + id)
 	for child, state := range table {
@@ -56,6 +57,7 @@ func cleanupProcesses(pid int, id string) {
 	defer ticker.Stop()
 	for {
 		table = processes()
+		reapAdopted(table)
 		// Shell job-control groups share a session ID; include new descendants too.
 		for child, state := range table {
 			if state.sid == pid {
@@ -79,13 +81,6 @@ func cleanupProcesses(pid int, id string) {
 			if !exists || state.start != born {
 				delete(targets, child)
 				continue
-			}
-			if child != pid && state.state == 'Z' && state.ppid == os.Getpid() {
-				process, err := os.FindProcess(child)
-				if err == nil {
-					_, _ = process.Wait()
-				}
-				delete(targets, child)
 			}
 		}
 		if len(targets) == 0 {

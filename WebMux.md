@@ -133,7 +133,7 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 | PTY | `github.com/creack/pty` | 事实标准，支持 `Setsize`、`StartWithSize` |
 | HTTP / 路由 | 标准库 `net/http` + `http.ServeMux`（1.22 新路由语法） | 零依赖，够用 |
 | WebSocket | `github.com/coder/websocket`（原 nhooyr） | 纯 Go、支持 context、二进制帧 |
-| 前端框架 | Preact + TypeScript + Vite | 体积小、手机加载快；也可用 Svelte，但不要用 React 全家桶 |
+| 前端框架 | Svelte + TypeScript + Vite | 体积小、手机加载快 |
 | 终端渲染 | `@xterm/xterm` 5.x + `@xterm/addon-fit` + `@xterm/addon-webgl`（失败回退 canvas） | 唯一成熟的浏览器终端实现 |
 | 嵌入 | `go:embed web/dist` | 一个二进制包含前端 |
 | 配置 | 命令行参数 + 可选 TOML 文件（`github.com/BurntSushi/toml`） | 单用户不需要复杂配置 |

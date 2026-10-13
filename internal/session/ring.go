@@ -31,11 +31,17 @@ func (r *RingBuffer) Write(p []byte) {
 	r.size = min(len(r.data), r.size+len(p))
 }
 func (r *RingBuffer) Snapshot() []byte {
+	return r.snapshotWithPrefix(nil)
+}
+
+// snapshotWithPrefix assembles the protocol header and history in one allocation.
+func (r *RingBuffer) snapshotWithPrefix(prefix []byte) []byte {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]byte, r.size)
+	out := make([]byte, len(prefix)+r.size)
+	copy(out, prefix)
 	start := (r.next - r.size + len(r.data)) % len(r.data)
-	n := copy(out, r.data[start:])
-	copy(out[n:], r.data[:r.next])
+	n := copy(out[len(prefix):], r.data[start:])
+	copy(out[len(prefix)+n:], r.data[:r.next])
 	return out
 }

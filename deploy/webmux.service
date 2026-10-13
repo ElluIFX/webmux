@@ -1,0 +1,14 @@
+[Unit]
+Description=WebMux persistent web terminal
+After=network-online.target tailscaled.service
+
+[Service]
+ExecStart=%h/.local/bin/webmux --config %h/.config/webmux/config.toml
+Restart=on-failure
+RestartSec=2
+Environment=PATH=%h/.local/bin:%h/.local/share/pnpm:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

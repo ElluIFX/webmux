@@ -73,6 +73,7 @@ func Attach(ctx context.Context, s *session.Session, c *websocket.Conn) {
 	}()
 	defer func() { cancel(); _ = c.CloseNow(); <-readerDone; <-inputDone }()
 	var pending []byte
+	var combinedBuffer []byte
 	for {
 		var frame []byte
 		if pending != nil {
@@ -89,8 +90,10 @@ func Attach(ctx context.Context, s *session.Session, c *websocket.Conn) {
 			}
 		}
 		if frame[0] == 0 {
-			combined := make([]byte, len(frame), 65537)
-			copy(combined, frame)
+			if combinedBuffer == nil {
+				combinedBuffer = make([]byte, 0, 65537)
+			}
+			combined := append(combinedBuffer[:0], frame...)
 			timer := time.NewTimer(50 * time.Millisecond)
 		aggregate:
 			for len(combined) < 65537 {

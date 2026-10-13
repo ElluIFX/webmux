@@ -215,6 +215,7 @@ func (m *Manager) updates() {
 			probeTick = !probeTick
 			if probeTick {
 				table = processes()
+				reapAdopted(table)
 			}
 			m.mu.Lock()
 			for id, s := range m.sessions {
@@ -263,5 +264,6 @@ func (m *Manager) Shutdown(ctx context.Context) {
 			forceSession(s.cmd.Process.Pid, s.info.ID)
 		}
 	}
+	reapAdopted(processes())
 	m.stopOnce.Do(func() { close(m.done) })
 }

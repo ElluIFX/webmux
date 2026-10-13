@@ -64,7 +64,7 @@ func start(id, cwd, preset, name string, argv []string, capacity int) (*Session,
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor", "WEBMUX_SESSION_ID="+id)
-	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	f, err := startPTY(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +73,8 @@ func start(id, cwd, preset, name string, argv []string, capacity int) (*Session,
 		_ = f.Close()
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
+		releaseLeader(cmd.Process.Pid)
+		cleanupProcesses(cmd.Process.Pid, id)
 		return nil, err
 	}
 	f = pollable
@@ -138,7 +140,7 @@ func (s *Session) Attach() *Subscriber {
 	return sub
 }
 func (s *Session) replayLocked(sub *Subscriber) {
-	s.sendLocked(sub, Frame(1, s.ring.Snapshot()))
+	s.sendLocked(sub, s.ring.snapshotWithPrefix([]byte{1}))
 	s.sendLocked(sub, s.stateLocked())
 	if s.info.ExitCode != nil {
 		data, _ := json.Marshal(map[string]int{"exitCode": *s.info.ExitCode})
@@ -210,6 +212,7 @@ func (s *Session) read() {
 }
 func (s *Session) wait() {
 	err := s.cmd.Wait()
+	releaseLeader(s.cmd.Process.Pid)
 	code := 0
 	if err != nil {
 		code = s.cmd.ProcessState.ExitCode()
