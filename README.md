@@ -23,7 +23,9 @@ make build
 - `make release VERSION=0.1.0`：生成 `bin/webmux-linux-amd64`、`bin/webmux-linux-arm64`，CGO 禁用。
 - `make install`：构建并安装到 `~/.local/bin/webmux`。
 - `make test`：Go race 测试与前端控制键行为测试。
-- `make check`：前端严格 TypeScript 构建、`go vet`、golangci-lint 默认规则。需先将 `golangci-lint` 放到 PATH。
+- `make check`：Svelte / TypeScript 检查、Vite 构建、格式检查、`go vet`、golangci-lint 默认规则。需先将 `golangci-lint` 放到 PATH。
+- `make format`：gofmt 格式化所有 Go 文件，Prettier 格式化前端代码、配置与文档。
+- `make format-check`：检查格式，不修改文件；构建产物和依赖目录除外。
 
 macOS 可编译运行，`/proc` 探测在非 Linux 平台返回 false；发布目标为 Linux。未构建前端时 `.gitkeep` 让 `go test` 能工作，但该状态的 HTTP 页面明确返回 503，不能当作可部署产品。
 
@@ -98,7 +100,7 @@ WebMux 不内置 TLS。需要安全上下文与系统剪贴板 API 时，可用 
 
 欢迎页按最近活跃时间显示会话、完整目录（视觉上中间省略）、命令、状态、预览与连接数。列表通过 WebSocket 实时更新，不轮询。新建支持目录补全、确认后创建目录、最近 5 个目录快捷选项（本地最多保存 10 个）、预设追加参数和可选固定名称。
 
-- 点击卡片进入终端；右上角 × 二次确认后关闭或移除已退出会话。
+- 点击卡片进入终端；右上角菜单选择关闭或移除，shadcn AlertDialog 二次确认。
 - 终端菜单提供复制全部原始缓冲、清屏、重新同步、字体大小和关闭会话。
 - 已退出会话保留退出码与最后输出，直到手动移除。
 - 同一会话可多端同时连接；**最后一次 resize 的客户端决定 PTY 尺寸**。
@@ -133,7 +135,9 @@ Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照�
 
 快照将类型前缀与缓冲内容组装到一次分配中；每连接复用最多 64 KiB 的输出合并工作区，避免每个小输出帧都重新分配大缓冲。共享 PTY 输出片段保持不可变，合并和 WebSocket 写入只由该连接的单个 writer 执行。
 
-前端使用 Preact / TypeScript / Vite / xterm 5，无 UI 或状态库；WebGL 不可用或上下文丢失时回退 xterm 内置 DOM 渲染器。允许的依赖没有 canvas addon，未另加依赖。
+前端使用 Svelte 5 / TypeScript / Vite / xterm 5，基础控件来自官方 [shadcn-svelte](https://www.shadcn-svelte.com/docs/installation/vite)，采用 Tailwind CSS 主题与 Svelte runes 状态。桌面 Dialog / 移动 Drawer、下拉菜单、关闭确认、目录补全和字体 Slider 均复用库组件。终端页懒加载，WebGL 不可用或上下文丢失时回退 xterm 内置 DOM 渲染器；终端与组件使用同一组 GitHub Dark / Light CSS 变量。
+
+`web/src/schemas.ts` 使用 Zod 定义会话、预设、列表事件、退出信息、健康检查、目录和本地设置契约，类型由 schema 推导。HTTP 响应和 WebSocket JSON 必须解析成功才进入页面状态；损坏的本地设置回到有效默认值。PTY 原始字节不转成 JSON，仍按二进制透传。
 
 ## 开发
 
@@ -142,9 +146,13 @@ pnpm --dir web install --frozen-lockfile
 pnpm --dir web dev
 go test -race ./...
 pnpm --dir web test
+make format
+make check
 ```
 
 Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被拒绝。生产不需要开发 Origin。
+
+shadcn 配置位于 `web/components.json`，生成的基础组件位于 `web/src/lib/components/ui/`；业务组件只组合这些基础控件。增加库组件使用 `pnpm --dir web exec shadcn-svelte add <组件名>`，随后 `make format`。不要重新引入旧前端框架或手写替代基础弹层 / 菜单。
 
 ## FAQ
 
@@ -161,3 +169,30 @@ Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** 
 **粘贴 / 复制没有权限？** HTTP 不是安全上下文，使用内置文本框回退或配置 HTTPS。复制全部是原始缓冲，可能包含 ANSI 转义序列。
 
 **重启之后找不到会话？** 这是本版本的明确边界：无数据库、无守护进程分离、不与 tmux 互通。
+
+## 验收记录（2026-10-14）
+
+以下为本次实际运行结果，不把模拟浏览器视为真机验收。
+
+| 项目             | 验证结果                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Go 检查          | `go test -race ./...`、`go vet ./...`、`golangci-lint run ./...` 通过，lint 0 issues                                                        |
+| 前端与格式       | Svelte / TypeScript 0 errors、0 warnings；Vite 构建无警告；控制键测试、`make format-check` 通过                                             |
+| pnpm 与打包      | frozen lockfile 安装、`make build`、`make release` 通过；JS + CSS 合计约 255 kB gzip                                                        |
+| HTTP / WebSocket | 真实服务验证 token / Origin、创建、输入、resize、双客户端、回放、退出码与移除                                                               |
+| 持久会话         | 零客户端持续 610.026 秒，重连快照完整包含 60 轮 `claude --version` 真实输出及结束标记；随后浏览器实际接收全部 60 轮并显示回放               |
+| 状态与标题       | OSC 标题、预览更新通过；测试提示符 2048 ms、真实 Claude 目录权限确认 2283 ms 收到 waiting 事件                                              |
+| 进程清理         | 实际 Bash、Claude 和忽略 HUP 的 sleep 子进程，5128 ms 内全部退出，`ps` 确认无残留                                                           |
+| 内存上限         | 20 个运行中会话，每个缓冲填满 2 MiB，服务 RSS 75.9 MiB                                                                                      |
+| 桌面 UI          | Token 登录、创建目录、创建会话、终端输入、卡片菜单、关闭确认、保留退出输出、移除通过                                                        |
+| 移动视口 UI      | 390px Chromium：Drawer、目录补全、预设参数、中文多行粘贴、粘滞键、折叠、捏合与字体持久化通过；844×390 横屏自动 resize 到 102×13，无横向溢出 |
+| 真实 Claude TUI  | 方向键切换 No / Yes，Esc 正常取消；Ctrl+C 提示再次按键后退出，退出码 1                                                                      |
+| 前台恢复         | Chromium 触发 visibilitychange 后 4 ms 收到真实 WebSocket 快照，历史输出保留；非真实手机锁屏                                                |
+| Zod              | 实际 HTTP 响应通过解析；畸形会话事件被拒绝；损坏目录列表被拒绝，损坏字体设置回退                                                            |
+| 跨平台           | Linux amd64 / arm64 静态二进制、macOS amd64 / arm64 编译通过；未在 arm64 / macOS 硬件运行                                                   |
+| 干净 Linux       | Debian bookworm-slim 仅挂载发布二进制，无 Node / Go，验证内嵌 SPA、认证、真实 Bash PTY、输出与退出码                                        |
+| systemd          | `systemd-analyze --user verify deploy/webmux.service` 通过；未替换当前用户的常驻服务                                                        |
+
+**仍需真机环境**：iOS Safari / Android Chrome 的中文输入法、`--help` 自动替换行为、VPN 切换、系统键盘与锁屏解锁后 3 秒恢复；当前只确认了输入属性、视口处理和浏览器恢复机制。没有连接真实移动设备，不将这些条目标记为已通过。4G 首屏 1 秒目标也未在真实蜂窝网络测量。
+
+Chromium 高 DPR 模拟时，环境的 `device-pixel-content-box` 与设备像素比不一致，可能使 WebGL 截图空白；DPR 1 下的移动布局与真实 WebGL 输出、以及上下文丢失后的 DOM 回退均已观察验证。这不是实际 iOS GPU 行为的证明。

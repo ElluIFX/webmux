@@ -1,15 +1,17 @@
 import { stored } from "./api";
 export type Connection =
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "exited"
-  | "missing";
+  "connecting" | "connected" | "reconnecting" | "exited" | "missing";
+export interface SocketConnection {
+  send(kind: number, payload: Uint8Array): boolean;
+  close(): void;
+  reconnect(): void;
+}
 export function connect(
   path: string,
   onMessage: (data: string | ArrayBuffer) => void,
   onState: (state: Connection) => void,
-) {
+  onError: (message: string) => void,
+): SocketConnection {
   let socket: WebSocket | undefined,
     timer: number | undefined,
     attempt = 0,
@@ -33,7 +35,13 @@ export function connect(
       onState("connected");
     };
     next.onmessage = (event) => {
-      if (socket === next) onMessage(event.data as string | ArrayBuffer);
+      if (socket !== next) return;
+      try {
+        onMessage(event.data);
+      } catch (error) {
+        onError(error instanceof Error ? error.message : "无效的服务器消息");
+        next.close(1002, "Invalid server message");
+      }
     };
     next.onclose = (event) => {
       if (socket !== next || disposed) return;

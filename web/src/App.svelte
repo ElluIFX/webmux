@@ -1,0 +1,98 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { api, store, stored } from "./api";
+  import { HealthSchema } from "./schemas";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Label } from "$lib/components/ui/label";
+  import * as Card from "$lib/components/ui/card";
+  import SessionList from "./pages/SessionList.svelte";
+
+  let path = $state(location.pathname);
+  let ready = $state(false);
+  let checking = $state(true);
+  let token = $state(stored("token"));
+  let error = $state("");
+  const match = $derived(path.match(/^\/s\/([a-z2-7]{8})$/));
+
+  async function check() {
+    checking = true;
+    try {
+      await api("/health", HealthSchema);
+      ready = true;
+      error = "";
+    } catch (err) {
+      error = (err as Error).message;
+    } finally {
+      checking = false;
+    }
+  }
+
+  onMount(() => {
+    const change = () => {
+      path = location.pathname;
+    };
+    const auth = () => {
+      ready = false;
+      checking = false;
+      error = "Token 无效或已更改";
+    };
+    window.addEventListener("popstate", change);
+    window.addEventListener("webmux:auth", auth);
+    void check();
+    return () => {
+      window.removeEventListener("popstate", change);
+      window.removeEventListener("webmux:auth", auth);
+    };
+  });
+</script>
+
+{#if !ready}
+  <main class="flex min-h-dvh items-center justify-center p-6">
+    <Card.Root class="w-full max-w-md">
+      <Card.Header>
+        <p class="brand mb-6"><span class="brand-mark">WM</span> WebMux</p>
+        <Card.Title class="text-2xl">你的终端，始终在线。</Card.Title>
+        <Card.Description>在可信内网中连接这台机器。</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {#if checking}
+          <p role="status" class="text-muted-foreground">正在连接…</p>
+        {:else}
+          <form
+            class="space-y-5"
+            onsubmit={(event) => {
+              event.preventDefault();
+              store("token", token);
+              void check();
+            }}
+          >
+            <div class="space-y-2">
+              <Label for="token">共享 Token</Label>
+              <Input
+                id="token"
+                type="password"
+                bind:value={token}
+                autocomplete="current-password"
+              />
+            </div>
+            {#if error}<p role="alert" class="text-destructive">{error}</p>{/if}
+            <Button type="submit" class="w-full">连接 WebMux →</Button>
+          </form>
+        {/if}
+      </Card.Content>
+    </Card.Root>
+  </main>
+{:else if match}
+  {#await import("./pages/Terminal.svelte")}
+    <p role="status" class="p-6 text-muted-foreground">正在加载终端…</p>
+  {:then page}
+    {#key match[1]}<page.default id={match[1]} />{/key}
+  {:catch error}
+    <p role="alert" class="p-6 text-destructive">
+      {error instanceof Error ? error.message : "终端加载失败"}
+    </p>
+  {/await}
+{:else}
+  <SessionList />
+{/if}

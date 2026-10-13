@@ -1,24 +1,6 @@
-export interface SessionInfo {
-  id: string;
-  title: string;
-  cwd: string;
-  preset: string;
-  cmd: string[];
-  status: "running" | "waiting" | "idle" | "exited";
-  exitCode: number | null;
-  lastLine: string;
-  createdAt: string;
-  lastActiveAt: string;
-  cols: number;
-  rows: number;
-  clients: number;
-}
-export interface Preset {
-  name: string;
-  label: string;
-  cmd: string[];
-  allowArgs: boolean;
-}
+import { z } from "zod";
+import { ErrorSchema, RecentDirsSchema, TextSettingSchema } from "./schemas";
+
 export class APIError extends Error {
   constructor(
     public status: number,
@@ -29,7 +11,9 @@ export class APIError extends Error {
 }
 export const stored = (key: string, fallback = "") => {
   try {
-    return localStorage.getItem("webmux." + key) ?? fallback;
+    return TextSettingSchema.parse(
+      localStorage.getItem("webmux." + key) ?? fallback,
+    );
   } catch {
     return fallback;
   }
@@ -55,22 +39,27 @@ async function request(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
-    const detail = await response
-      .json()
-      .catch(() => ({ error: response.statusText }));
+    const detail = ErrorSchema.safeParse(
+      await response.json().catch(() => null),
+    );
     if (response.status === 401) window.dispatchEvent(new Event("webmux:auth"));
-    throw new APIError(response.status, detail.error);
+    throw new APIError(
+      response.status,
+      detail.success ? detail.data.error : response.statusText,
+    );
   }
   return response;
 }
-export async function api<T>(
+export async function api<T extends z.ZodType>(
   path: string,
+  schema: T,
   method = "GET",
   body?: unknown,
-): Promise<T> {
+): Promise<z.output<T>> {
   const response = await request(path, method, body);
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  return schema.parse(
+    response.status === 204 ? undefined : await response.json(),
+  );
 }
 export async function apiBuffer(id: string): Promise<Uint8Array> {
   return new Uint8Array(
@@ -89,10 +78,7 @@ export const statusText = {
 };
 export function recentDirs(): string[] {
   try {
-    const value: unknown = JSON.parse(stored("recentDirs", "[]"));
-    return Array.isArray(value)
-      ? value.filter((x): x is string => typeof x === "string").slice(0, 10)
-      : [];
+    return RecentDirsSchema.parse(JSON.parse(stored("recentDirs", "[]")));
   } catch {
     return [];
   }
