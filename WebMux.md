@@ -1,0 +1,637 @@
+# WebMux 产品与技术设计文档
+
+Oct 13, 2026 · @RainChan
+
+## 1. 项目概述
+
+WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服务，用于在浏览器（尤其是手机和平板）里创建、查看、操作多个持久化终端会话，典型用途是远程遥控 Claude Code、Codex CLI 等命令行 agent。
+
+**核心问题**：ttyd 一类工具在浏览器断开后会话即终止，手机锁屏、切网、关浏览器都会丢掉正在运行的 agent。WebMux 把 PTY 的生命周期与浏览器连接解耦：会话由服务端持有，浏览器只是“附着”上去，随时断开、随时重连，重连后能看到断线期间的全部输出。
+
+**目标**
+
+- 会话在浏览器断开后继续存活，重连后恢复完整滚动缓冲
+- 欢迎页展示所有会话及其标题、工作目录、状态（运行中 / 等待输入 / 空闲 / 已退出）
+- 新建会话时可选工作目录和预设启动命令（如 `claude`、`codex`）
+- 手机 / 平板浏览器上可用：响应式布局、虚拟键盘友好、必要的软键（Esc、Ctrl、方向键、Tab 等）
+- 单二进制部署，前端静态资源嵌入，`systemd` 一条服务即可运行
+
+**非目标（本版本明确不做）**
+
+- 不做多机中心网关，每台机器各自部署、各自访问
+- 不做多用户 / 权限体系，以启动服务的 Linux 用户身份运行，单用户
+- 不做服务进程重启后的会话存活（守护进程分离架构），重启即丢会话
+- 不做文件上传下载、分屏、推送通知；这些列为后续可选扩展
+- 不依赖系统 tmux，也不与已有 tmux 会话互通
+
+**部署与安全前提**：服务只监听 Tailscale / WireGuard 内网地址，认证仅为一个可选的共享 token，不暴露公网。
+
+## 2. 需求与约束
+
+以下决策已在需求访谈中确认，实现时不要偏离。
+
+| 维度 | 决策 | 对实现的影响 |
+| --- | --- | --- |
+| 会话持久化 | 自研 PTY 管理器，不依赖 tmux | 服务进程内用 `creack/pty` fork 子进程，自己维护环形滚动缓冲 |
+| 部署形态 | 单机，每台 Linux 独立部署 | 无主从、无注册中心，配置极简 |
+| 网络与认证 | 走 Tailscale / WireGuard 内网 | 默认只绑定内网地址；可选共享 token，无账号体系 |
+| 技术栈 | Go 单二进制，前端嵌入 | `go:embed` 打包前端产物，`go build` 即得部署物 |
+| 运行身份 | 当前 Linux 用户，单用户 | 不做 setuid / 用户切换，不做鉴权细粒度 |
+| 服务重启 | 会话随服务退出 | 不做状态落盘，不做守护进程分离；进程内存即状态 |
+| 欢迎页 | 列出所有会话，显示 title、目录、状态 | 需要会话状态探测与 title 探测 |
+| 会话 title | 优先终端 OSC 0/2 设置的 title，没有则用工作目录名 | 服务端解析 PTY 输出流中的 OSC 序列 |
+| 新建会话 | 选工作目录 + 可选预设启动命令 | 预设列表来自配置文件，默认含 shell、claude、codex |
+| 会话状态 | 运行中 / 等待输入 / 空闲 / 已退出 | 基于输出活跃度 + 前台进程启发式判断 |
+| 移动端 | 手机 / 平板浏览器可用 | 响应式布局、软键栏、触摸滚动、粘贴 |
+
+**约束与假设**
+
+- 目标系统为 Linux（amd64 / arm64），不考虑 Windows；macOS 作为开发环境可编译运行
+- 同时存在的会话数量级为十几个，不做大规模优化
+- 单个浏览器标签可同时打开一个会话；同一会话允许多个浏览器同时附着（多端同看）
+- 滚动缓冲默认保留 10,000 行（可配置），超出后丢弃最旧行
+- 不做录像回放，只保证重连时能回放当前缓冲
+
+## 3. 产品设计
+
+整个产品只有两个页面：欢迎页（会话列表）和终端页。所有路由在前端处理，后端只提供 API 和静态资源。
+
+### 3.1 欢迎页 `/`
+
+页面顶部是标题栏和“新建会话”按钮，主体是会话卡片列表，按最近活跃时间倒序排列。
+
+每张卡片显示：
+
+- **标题**：OSC title，没有则工作目录名（basename）
+- **状态点 + 文字**：运行中（绿色，有输出流动）、等待输入（黄色，2 秒无输出且光标停在提示符）、空闲（灰色，30 秒以上无输出）、已退出（红色，显示退出码）
+- **工作目录**完整路径，过长时中间省略
+- **启动命令**（如 `claude`、`codex`、`bash`）
+- **最近活跃时间**（相对时间，如“3 分钟前”）
+- **输出预览**：最后一行非空输出，单行截断，方便不打开就知道 agent 在干什么
+
+卡片交互：
+
+- 点击卡片 → 进入终端页
+- 长按 / 右上角菜单 → 重命名（手动名覆盖自动 title，此为可选扩展，本版本只做“关闭会话”）、关闭会话（二次确认，发送 SIGHUP 后 5 秒未退出则 SIGKILL）
+- 已退出的会话保留在列表中直到用户手动移除，方便查看最后输出
+
+列表通过 WebSocket `/ws/sessions` 实时更新，不轮询。
+
+### 3.2 新建会话弹层
+
+从欢迎页点击“新建会话”弹出底部抽屉（移动端）或居中对话框（桌面端），包含：
+
+1. **工作目录**：文本输入框，带目录补全下拉（输入时请求 `/api/fs/dirs?prefix=`），默认值为上一次使用的目录，支持 `~` 展开；旁边列出最近使用过的 5 个目录快捷选项
+2. **启动命令**：单选芯片，来自配置文件 `presets`，默认提供：`shell`（用户默认 shell）、`claude`、`codex`；选中后显示实际命令行，允许在文本框中追加参数（如 `claude --resume`）
+3. **会话名称**（可选）：留空则自动 title
+4. 确认按钮：创建成功后直接跳转终端页
+
+目录不存在时提示“目录不存在，是否创建？”，用户确认后 `mkdir -p`。
+
+### 3.3 终端页 `/s/:id`
+
+布局自上而下：
+
+- **顶栏**（高度 44px）：返回按钮、会话 title、状态点、连接状态图标（已连接 / 重连中）、右侧菜单（复制全部缓冲、清屏、关闭会话、字体大小）
+- **终端区**：xterm.js，占满剩余空间；横屏和竖屏自动根据容器尺寸 fit，并把新 cols/rows 发回服务端 `SIGWINCH`
+- **软键栏**（仅触摸设备显示，可折叠）：`Esc` `Tab` `Ctrl` `Alt` `↑` `↓` `←` `→` `Home` `End` `PgUp` `PgDn` `粘贴` `⌨`（唤起/收起系统键盘）。`Ctrl` 和 `Alt` 为粘滞键：点一下后下一个按键带修饰符，再点取消
+- 常用组合单独给按钮：`Ctrl+C`、`Ctrl+D`、`Ctrl+Z`、`Ctrl+L`、`Ctrl+R`，一行放不下时横向滚动
+
+终端页交互细节：
+
+- 进入页面先回放服务端缓冲，回放期间显示“正在恢复…”遮罩，回放完成后滚动到底部
+- WebSocket 断开后自动重连（指数退避 0.5s→8s），重连后再次回放整个缓冲并清屏重绘，保证一致
+- 触摸滑动在终端区滚动历史，而不是被当作鼠标事件发给程序
+- 双指捏合调整字体大小（12–20px），设置存在 localStorage
+- 浏览器标签页标题同步显示会话 title
+- 页面隐藏（切后台）时暂停渲染但保持 WebSocket；iOS 杀掉连接后回到前台会触发重连
+
+### 3.4 状态判定规则（用户可见的定义）
+
+| 状态 | 判定 |
+| --- | --- |
+| 运行中 | 最近 2 秒内有输出 |
+| 等待输入 | 2 秒以上无输出，且前台进程处于读终端阻塞（`/proc/<pid>/wchan` 或 `stat` 显示 sleeping 且无子进程在跑），或输出末尾匹配提示符特征（行尾为 ` $  `、` >  `、` ❯  `、` ?  `、`(y/n)` 等） |
+| 空闲 | 30 秒以上无输出且不满足“等待输入”特征 |
+| 已退出 | 子进程已退出，记录退出码 |
+
+“等待输入”是 agent 场景最关心的状态：Claude Code 请求权限、问是否继续时都会停在这里。启发式可能误判，UI 文案用“可能在等你”而非断言。
+
+## 4. 技术架构
+
+架构只有三层：浏览器、WebMux 进程、子进程。WebMux 进程内的 Session Manager 持有所有 Session，每个 Session 拥有一个 PTY、一个环形缓冲、一个 OSC 解析器和一个状态探测器。浏览器通过两条 WebSocket 分别订阅会话列表和单个会话的字节流，断开只影响浏览器自己，不影响 Session。
+
+&#91;embedded content: WebMux 架构 · 浏览器 / Go 进程 / 子进程三层\]
+
+浏览器断线后 Session 继续从 PTY 读取并写入环形缓冲；重连时服务端先发缓冲快照再接实时流，因此手机锁屏期间 agent 的输出不会丢。
+
+### 4.1 技术选型
+
+| 层 | 选型 | 理由 |
+| --- | --- | --- |
+| 语言 | Go 1.22+ | 单二进制、交叉编译、goroutine 天然适合每会话一读一写 |
+| PTY | `github.com/creack/pty` | 事实标准，支持 `Setsize`、`StartWithSize` |
+| HTTP / 路由 | 标准库 `net/http` + `http.ServeMux`（1.22 新路由语法） | 零依赖，够用 |
+| WebSocket | `github.com/coder/websocket`（原 nhooyr） | 纯 Go、支持 context、二进制帧 |
+| 前端框架 | Preact + TypeScript + Vite | 体积小、手机加载快；也可用 Svelte，但不要用 React 全家桶 |
+| 终端渲染 | `@xterm/xterm` 5.x + `@xterm/addon-fit` + `@xterm/addon-webgl`（失败回退 canvas） | 唯一成熟的浏览器终端实现 |
+| 嵌入 | `go:embed web/dist` | 一个二进制包含前端 |
+| 配置 | 命令行参数 + 可选 TOML 文件（`github.com/BurntSushi/toml`） | 单用户不需要复杂配置 |
+| 日志 | 标准库 `log/slog` | 结构化日志，`journalctl` 直接可读 |
+| 构建 | `Makefile`：`make web` → `make build` | 前端产物进入 `web/dist` 再编译 Go |
+
+### 4.2 关键设计原则
+
+- **Session 与连接解耦**：Session 的生命周期只由子进程决定，WebSocket 连接是观察者，可以为零个、一个或多个
+- **服务端只传字节，不解释终端**：PTY 原始字节直接进缓冲、直接转发给 xterm.js，服务端只“旁路嗅探” OSC 序列和活跃度，不做终端仿真
+- **重连 = 清屏 + 全量回放 + 续流**：不做增量 diff，简单且一致；缓冲上限控制回放成本（10,000 行约几百 KB）
+- **单进程、内存态**：无数据库、无文件状态，重启即清空；配置文件只读
+- **尺寸由最后附着的客户端决定**：多端同看时，最近一次发送 resize 的客户端尺寸生效（和 tmux 的默认策略不同，但对手机 + 桌面交替使用更友好）
+
+## 5. 后端详细设计
+
+后端分四个包：`internal/session`（PTY 与缓冲）、`internal/hub`（WebSocket 分发）、`internal/api`（HTTP 路由）、`internal/config`。核心复杂度全部在 `session` 包。
+
+### 5.1 Session 数据结构
+
+```go
+type Status string
+const (
+    StatusRunning Status = "running"
+    StatusWaiting Status = "waiting"   // 可能在等输入
+    StatusIdle    Status = "idle"
+    StatusExited  Status = "exited"
+)
+
+type Session struct {
+    ID        string    // 8 位随机 base32，URL 安全
+    Cmd       []string  // 实际 exec 的 argv
+    Preset    string    // 预设名，如 "claude"
+    Cwd       string
+    CreatedAt time.Time
+
+    mu        sync.RWMutex
+    pty       *os.File
+    proc      *os.Process
+    cols, rows uint16
+    title     string     // OSC 解析结果，空则用 filepath.Base(Cwd)
+    userTitle string     // 预留：手动改名
+    lastOut   time.Time  // 最近一次有输出的时间
+    lastLine  string     // 最后一行非空输出（去除 ANSI 后），用于列表预览
+    status    Status
+    exitCode  *int
+
+    ring      *RingBuffer          // 原始字节环形缓冲
+    subs      map[*Subscriber]struct{} // 附着的 WebSocket
+    done      chan struct{}
+}
+```
+
+### 5.2 创建与运行
+
+1. `Manager.Create(cwd, preset, extraArgs, name)`：校验 `cwd` 存在且是目录（相对路径和 `~` 在前端已展开，后端再做一次 `filepath.Abs`）
+2. 组装命令：preset 在配置中定义为 argv 数组，`extraArgs` 追加其后；`shell` 预设取 `$SHELL`，为空则 `/bin/bash`，以登录交互方式启动（`-l -i` 可配置）
+3. 环境变量：继承服务进程环境，并显式设置 `TERM=xterm-256color`、`COLORTERM=truecolor`、`LANG`（继承）、`WEBMUX_SESSION_ID=<id>`
+4. `pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})` 启动；初始尺寸随后由第一个附着的客户端 resize 覆盖
+5. 启动三个 goroutine：
+   - **reader**：循环 `pty.Read` 到 32 KB 临时缓冲 → 写入 ring → 喂给 OSC 扫描器和 lastLine 提取器 → 更新 `lastOut` → 广播给所有 `subs`（非阻塞，慢客户端用带缓冲 channel，满则断开该客户端让它重连回放）
+   - **waiter**：`proc.Wait()` 返回后设置 `exitCode`、`status = exited`、关闭 pty、关闭 `done`，广播状态变更
+   - **status ticker**：每 1 秒评估一次状态（见 5.5），变化时广播到 `/ws/sessions`
+6. `Manager.Close(id)`：先发 `SIGHUP` 给进程组（`syscall.Kill(-pid, SIGHUP)`，启动时设置 `Setsid: true`），5 秒后仍未退出则 `SIGKILL`
+7. `Manager.Remove(id)`：只允许移除已退出的会话，从 map 中删除
+
+### 5.3 环形缓冲 RingBuffer
+
+按**字节**而非按行实现，避免解析 ANSI 的复杂度：
+
+- 固定容量，默认 2 MB（约等于 10,000 行 × 200 字节的上限，配置项 `scrollback_bytes`）
+- `Write(p []byte)`：写满后覆盖最旧字节
+- `Snapshot() []byte`：返回从最旧到最新的连续副本
+- 回放时在快照前缀发送 `\x1b[H\x1b[2J`（清屏归位）由前端处理；快照可能从一个转义序列中间开始，xterm.js 对此容忍良好，首行偶尔乱码可接受
+- 每次 `Write` 都加锁，`Snapshot` 加读锁；写入频率不高（PTY 读取已经聚合）
+
+**为什么不按行存**：agent 输出大量使用光标移动和重绘（spinner、进度条、Claude Code 的 TUI），按行截断会破坏序列；按字节回放再由 xterm.js 重新解释是最稳的方案。
+
+### 5.4 OSC title 解析
+
+在 reader goroutine 里对每个 chunk 做增量状态机扫描，不影响转发：
+
+- 匹配 `ESC ] 0 ; <text> BEL` 或 `ESC ] 2 ; <text> BEL`，终止符也接受 `ESC \`（ST）
+- 跨 chunk 的序列要能拼接：状态机保存“已进入 OSC、累积到的文本”，最大累积 512 字节，超出则放弃
+- 解析成功 → `title = text`（去首尾空白），与旧值不同时广播状态变更
+- `Title()` 方法返回优先级：`userTitle` > `title` > `filepath.Base(Cwd)`
+
+Claude Code 和多数 shell 配置（oh-my-zsh、starship）都会设置 OSC 0/2 title，所以列表里通常能看到 `✳ claude` 或 `user@host: ~/proj` 这样的名字。
+
+### 5.5 状态探测
+
+每秒评估，输入为 `lastOut`、进程状态、`lastLine`：
+
+```
+if exited → exited
+else if now - lastOut < 2s → running
+else if looksLikePrompt(lastLine) || foregroundBlockedOnRead(pid) → waiting
+else if now - lastOut > 30s → idle
+else → waiting   // 2–30s 无输出且判断不出来，倾向提示用户看一眼
+```
+
+- `looksLikePrompt`：去除 ANSI 后的最后一行，去尾空格后以 `$`、`#`、`%`、`>`、`❯`、`›`、`?`、`:` 结尾，或包含 `(y/n)`、`[Y/n]`、`Yes`/`No` 选项、`Press Enter` 等模式；模式列表放在配置里可扩展
+- `foregroundBlockedOnRead`：读 `/proc/<pid>/stat` 的 state 字段，若整棵进程树（通过 `/proc/*/stat` 的 ppid 遍历）里没有 `R` 状态进程且叶子进程为 `S`，视为阻塞；非 Linux 平台此函数返回 false
+- 状态只是展示用，不驱动任何自动化动作，误判无害
+
+### 5.6 lastLine 提取
+
+对每个 chunk 去除 ANSI CSI/OSC 序列（用简单正则 `\x1b\[[0-9;?]*[ -/]*[@-~]` 和 OSC 扫描结果），按 `\n` 和 `\r` 分割取最后一个非空片段，截断到 120 字符存入 `lastLine`。用于欢迎页预览，不要求精确。
+
+### 5.7 Hub 与 Subscriber
+
+- `Subscriber` 封装一个 WebSocket 连接 + `out chan []byte`（容量 256）
+- 附着流程：`hub.Attach(sessionID, conn)` → 发送快照（一帧二进制，前缀见协议节）→ 加入 `subs` → 之后 reader 广播的每个 chunk 都写入 `out`
+- 写 goroutine 把 `out` 的数据合并成尽量大的帧发送（最多聚合 50 ms 或 64 KB），减少手机端帧数
+- 读 goroutine 处理客户端上行：输入字节直接 `pty.Write`，resize 消息调用 `pty.Setsize` 并记录
+- 连接关闭或写超时（10 s）→ 从 `subs` 移除；Session 不受影响
+- `/ws/sessions` 的订阅者维护在 Manager 一级，收到的是 JSON 事件
+
+### 5.8 并发与资源
+
+- Manager 持有 `map[string]*Session` + `sync.RWMutex`
+- 每个 Session 固定 3 个 goroutine + 每个订阅者 2 个 goroutine，20 个会话 × 2 端约 150 个 goroutine，可忽略
+- 服务收到 `SIGTERM` 时：对所有 Session 执行 `Close`，等待最多 10 秒，再退出；不做任何持久化
+- 单个会话内存上限 ≈ 2 MB 缓冲 + 订阅者 channel，总内存约 50 MB 量级
+
+## 6. 通信协议
+
+所有 API 以 `/api` 为前缀，WebSocket 以 `/ws` 为前缀，其余路径返回嵌入的前端 `index.html`（SPA 回退）。启用 token 时，HTTP 请求带 `Authorization: Bearer <token>` 或 Cookie `webmux_token`，WebSocket 通过同名 Cookie 或 query `?token=` 认证。
+
+### 6.1 HTTP API
+
+| 方法 | 路径 | 说明 | 请求 / 响应 |
+| --- | --- | --- | --- |
+| GET | `/api/sessions` | 列出会话 | 响应 `SessionInfo[]`，按 `lastActiveAt` 倒序 |
+| POST | `/api/sessions` | 创建会话 | 请求 `{cwd, preset, args?: string[], name?}`；201 返回 `SessionInfo`；400 目录不存在 / preset 未知 |
+| GET | `/api/sessions/{id}` | 单个会话信息 | `SessionInfo`；404 |
+| DELETE | `/api/sessions/{id}` | 关闭会话（SIGHUP → SIGKILL） | 204 |
+| DELETE | `/api/sessions/{id}?remove=1` | 从列表移除已退出会话 | 204；409 会话仍在运行 |
+| GET | `/api/sessions/{id}/buffer` | 下载完整缓冲（原始字节） | `application/octet-stream`，用于“复制全部” |
+| GET | `/api/presets` | 预设列表 | `Preset[]` |
+| GET | `/api/fs/dirs?prefix=/home/u/pro` | 目录补全 | 最多 20 个匹配的子目录绝对路径 |
+| POST | `/api/fs/mkdir` | 创建目录 | `{path}`；204 |
+| GET | `/api/health` | 健康检查 | `{ok: true, sessions: n}` |
+
+```ts
+interface SessionInfo {
+  id: string;
+  title: string;        // 已按优先级算好
+  cwd: string;
+  preset: string;       // "shell" | "claude" | "codex" | 自定义
+  cmd: string[];
+  status: "running" | "waiting" | "idle" | "exited";
+  exitCode: number | null;
+  lastLine: string;
+  createdAt: string;    // RFC3339
+  lastActiveAt: string;
+  cols: number; rows: number;
+  clients: number;      // 当前附着的浏览器数
+}
+
+interface Preset {
+  name: string;         // "claude"
+  label: string;        // "Claude Code"
+  cmd: string[];        // ["claude"]
+  allowArgs: boolean;
+}
+```
+
+### 6.2 WebSocket `/ws/sessions`（会话列表）
+
+文本帧，JSON。连接建立后服务端先发一条 `snapshot`，之后推送增量事件：
+
+```json
+{"type":"snapshot","sessions":[SessionInfo, ...]}
+{"type":"created","session":SessionInfo}
+{"type":"updated","session":SessionInfo}   // 状态、title、lastLine、clients 变化
+{"type":"removed","id":"abc123"}
+```
+
+`updated` 事件节流：同一会话 500 ms 内最多发一次，`lastLine` 的变化单独再节流到 2 s。客户端不需要发任何消息，可定期发 ping 帧保活。
+
+### 6.3 WebSocket `/ws/s/{id}`（终端流）
+
+服务端 → 客户端，**二进制帧**，第一个字节是类型：
+
+| 首字节 | 含义 | 载荷 |
+| --- | --- | --- |
+| `0x00` | 输出 | PTY 原始字节 |
+| `0x01` | 快照 | 附着时发一次，载荷为整个 ring 内容；客户端收到应先 `terminal.reset()` 再写入 |
+| `0x02` | 状态 | JSON `SessionInfo`（UTF-8），用于顶栏标题与状态点 |
+| `0x03` | 退出 | JSON `{"exitCode": n}`，之后服务端关闭连接 |
+
+客户端 → 服务端，同样**二进制帧**，第一个字节是类型：
+
+| 首字节 | 含义 | 载荷 |
+| --- | --- | --- |
+| `0x00` | 输入 | 要写入 PTY 的字节（xterm.js `onData` 的字符串按 UTF-8 编码） |
+| `0x01` | resize | JSON `{"cols": n, "rows": n}` |
+| `0x02` | 重放请求 | 空；服务端回一帧 `0x01` 快照（前端重连或主动“重新同步”时用） |
+
+采用二进制帧而非 JSON 包裹输出，是为了避免 base64 开销和 UTF-8 截断问题（PTY 输出可能在多字节字符中间切断，二进制帧原样透传给 xterm.js 的 `write(Uint8Array)` 可正确处理）。
+
+### 6.4 错误与关闭码
+
+- 认证失败：HTTP 401；WebSocket 握手阶段直接 401，不升级
+- 会话不存在：HTTP 404；WebSocket 关闭码 `4404`
+- 会话已退出时附着：仍允许，发快照和 `0x03` 退出帧后关闭，关闭码 `4410`
+- 服务端写超时或客户端 channel 满：关闭码 `4408`，前端应立即重连并清屏回放
+
+## 7. 前端详细设计
+
+前端是一个 Preact + TypeScript 的 SPA，用 Vite 构建，产物放到 `web/dist` 由 Go 嵌入。总包体目标 < 400 KB gzip（xterm.js 本身约 150 KB），首屏在 4G 网络 1 秒内可交互。
+
+### 7.1 页面与路由
+
+用 `preact-router` 或手写 `history` 监听，两个路由：
+
+- `/` → `SessionListPage`
+- `/s/:id` → `TerminalPage`
+
+`index.html` 需要：`<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">`，`interactive-widget=resizes-content` 让 Android Chrome 弹出键盘时缩小视口而不是遮挡终端；iOS 用 `visualViewport` API 监听处理（见 7.4）。加 `manifest.webmanifest` 和 `apple-mobile-web-app-capable`，用户可“添加到主屏幕”全屏运行。
+
+### 7.2 SessionListPage
+
+- 挂载时 `GET /api/presets` 和连接 `/ws/sessions`，首个 `snapshot` 到达前显示骨架屏
+- 状态存在一个 `Map<string, SessionInfo>` signal 里，事件直接更新对应项
+- 卡片组件 `SessionCard`：标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、目录、预设名、相对时间（每 30 秒刷新一次）、`lastLine` 单行等宽字体预览
+- 空状态：没有会话时显示“还没有会话”和一个大按钮“新建会话”
+- `NewSessionSheet`：底部抽屉（`position: fixed; bottom: 0`），字段见产品设计 3.2；目录输入框 `debounce 200ms` 请求 `/api/fs/dirs`，下拉选择后填充；最近目录存 localStorage `webmux.recentDirs`（最多 10 个）
+- WebSocket 断开时顶部显示黄色细条“连接已断开，重连中…”，自动重连
+
+### 7.3 TerminalPage
+
+核心是 `useTerminal(sessionId)` hook，负责 xterm 实例与 WebSocket 生命周期：
+
+```ts
+const term = new Terminal({
+  fontFamily: '"JetBrains Mono", "SF Mono", Menlo, monospace',
+  fontSize: settings.fontSize,   // 默认 14，手机 13
+  scrollback: 10000,
+  cursorBlink: true,
+  allowProposedApi: true,
+  theme: darkTheme,              // 跟随 prefers-color-scheme
+  macOptionIsMeta: true,
+});
+term.loadAddon(fitAddon);
+try { term.loadAddon(new WebglAddon()); } catch { /* 回退 canvas */ }
+```
+
+消息处理：
+
+- 收到 `0x01` 快照：`term.reset()` → `term.write(payload)` → 写入完成回调里 `term.scrollToBottom()`，隐藏“正在恢复”遮罩
+- 收到 `0x00` 输出：`term.write(payload)`，注意 `write` 接受 `Uint8Array`
+- 收到 `0x02` 状态：更新顶栏 title、状态点、`document.title`
+- 收到 `0x03` 退出：显示“进程已退出（code n）”横幅，提供“返回列表”和“移除会话”按钮，终端保留可滚动
+- `term.onData(s)` → 发送 `0x00` + `TextEncoder.encode(s)`
+- `term.onResize({cols, rows})` → 发送 `0x01` + JSON
+- `ResizeObserver` 监听容器 → `fitAddon.fit()`（debounce 100 ms）
+
+重连策略：`close` 事件后按 500 ms × 2^n（上限 8 s）重试，重连成功后服务端自动发快照，前端在快照到达时 `reset`。`visibilitychange` 回到前台时若 socket 非 OPEN 立即重连。
+
+### 7.4 移动端适配
+
+这是产品能否真正用起来的关键，按以下规则实现：
+
+- **布局**：`height: 100dvh` 的 flex 列：顶栏 44px、终端 `flex: 1; min-height: 0`、软键栏 44px；safe-area 用 `env(safe-area-inset-*)` 补 padding
+- **键盘弹出**：监听 `window.visualViewport` 的 `resize`，把根容器高度设为 `visualViewport.height`，并 `fit()`；iOS Safari 弹键盘时页面可能被整体推上去，需要在 resize 回调里 `window.scrollTo(0,0)`
+- **输入法**：xterm.js 自带的隐藏 textarea 在手机上行为正常，但要设置 `term.textarea.setAttribute('autocapitalize','off')`、`autocorrect=off`、`spellcheck=false`，否则 iOS 会自动大写首字母、把 `--` 换成破折号
+- **唤起键盘**：点击终端区域 `term.focus()`；软键栏的 `⌨` 按钮在已聚焦时 `term.blur()` 收起键盘
+- **软键栏**：按钮 `onPointerDown` 时 `preventDefault()` 防止终端失焦导致键盘收起；发送的字节：`Esc`=`\x1b`，`Tab`=`\t`，方向键=`\x1b[A/B/C/D`，`Home`=`\x1b[H`，`End`=`\x1b[F`，`PgUp`=`\x1b[5~`，`PgDn`=`\x1b[6~`；`Ctrl` 粘滞后下一个字母 `c` 发送 `c.charCodeAt(0) & 0x1f`；`Alt` 粘滞后发送 `\x1b` + 字母
+- **粘贴**：`navigator.clipboard.readText()` 需要 HTTPS 或 localhost，Tailscale 下常是 HTTP，因此粘贴按钮回退方案是弹出一个 textarea 让用户粘贴后点“发送”；多行内容用 bracketed paste（`\x1b[200~` … `\x1b[201~`）包裹，Claude Code 能正确识别
+- **滚动**：开启 xterm 的触摸滚动（默认支持），但要在终端区上 `touch-action: pan-y`；禁用浏览器的下拉刷新（`overscroll-behavior: none`）
+- **字体缩放**：双指捏合用 `touchmove` 计算两指距离变化，改 `term.options.fontSize`（12–20），结束时 `fit()` 并存 localStorage
+- **横屏**：无特殊处理，`fit()` 自动适应；软键栏在横屏时可折叠为一个小把手以节省空间
+- **桌面端**：隐藏软键栏（`@media (pointer: fine)`），`Ctrl+Shift+C/V` 复制粘贴，其余与普通终端一致
+
+### 7.5 主题与样式
+
+- 跟随 `prefers-color-scheme`，深色为默认优化目标（手机夜间使用）
+- xterm 主题取 GitHub Dark / Light 两套色板，与页面 CSS 变量同源
+- 不引入 UI 组件库，手写约 300 行 CSS；图标用内联 SVG（约 10 个）
+
+### 7.6 前端状态与存储
+
+只用 localStorage 存：`webmux.fontSize`、`webmux.recentDirs`、`webmux.lastPreset`、`webmux.token`（启用 token 时首次访问提示输入并存下）。不用任何全局状态库，Preact signals 足够。
+
+## 8. 配置、安全与部署
+
+### 8.1 配置
+
+命令行参数优先于配置文件，配置文件默认路径 `~/.config/webmux/config.toml`，不存在则全部用默认值。
+
+```toml
+# ~/.config/webmux/config.toml
+listen = "100.64.0.5:7681"        # 默认 "127.0.0.1:7681"；填 Tailscale IP 或 "0.0.0.0:7681"
+token = ""                        # 空 = 不认证；非空则所有请求必须携带
+scrollback_bytes = 2097152        # 每会话环形缓冲，2 MB
+default_cwd = "~"                 # 新建会话默认目录
+shell = ""                        # 空 = $SHELL
+idle_after_seconds = 30
+prompt_patterns = ['\$ ?$', '❯ ?$', '> ?$', '\(y/n\)', '\[Y/n\]', 'Press Enter']
+
+[[presets]]
+name = "shell"
+label = "Shell"
+cmd = []                          # 空 = 使用 shell 配置
+allow_args = false
+
+[[presets]]
+name = "claude"
+label = "Claude Code"
+cmd = ["claude"]
+allow_args = true
+
+[[presets]]
+name = "codex"
+label = "Codex CLI"
+cmd = ["codex"]
+allow_args = true
+```
+
+命令行：`webmux --listen 0.0.0.0:7681 --token xxx --config path.toml`，另有 `webmux version`。
+
+### 8.2 安全边界
+
+这是一个以当前用户身份执行任意命令的服务，等价于把 shell 暴露在网络上。安全完全依赖网络层隔离：
+
+- **默认只绑 `127.0.0.1`**，用户必须显式改为 Tailscale 地址；绑定 `0.0.0.0` 且 `token` 为空时启动打印醒目警告（不拒绝启动，但日志 WARN）
+- `token` 比较用 `crypto/subtle.ConstantTimeCompare`
+- WebSocket 握手校验 `Origin`：必须与 `Host` 同源，或在配置 `allowed_origins` 中；防止其他网站页面通过浏览器发起连接
+- `/api/fs/dirs` 和 `mkdir` 只在当前用户可访问的路径上操作，不做额外沙箱（本来就是本人 shell）
+- 不记录终端输入输出到日志；日志只含会话创建 / 退出 / 连接事件
+- 响应头加 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`
+- 不做 HTTPS：Tailscale 已加密；若用户要 HTTPS，让他们前置 Caddy 或用 `tailscale serve`
+
+### 8.3 构建
+
+```makefile
+web:            # 构建前端
+	cd web && npm ci && npm run build
+
+build: web      # 构建 Go 二进制，嵌入 web/dist
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/webmux ./cmd/webmux
+
+release:        # 交叉编译 linux/amd64 + linux/arm64
+	GOOS=linux GOARCH=amd64 ... && GOOS=linux GOARCH=arm64 ...
+```
+
+`web/dist` 加入 `.gitignore`，但提交一个 `web/dist/.gitkeep` 让 `go:embed` 在没构建前端时也能编译通过（或用 `embed.FS` 的 `all:` 前缀并在 `go vet` 阶段跳过）。
+
+### 8.4 部署（systemd 用户服务）
+
+```ini
+# ~/.config/systemd/user/webmux.service
+[Unit]
+Description=WebMux web terminal
+After=network-online.target tailscaled.service
+
+[Service]
+ExecStart=%h/.local/bin/webmux --config %h/.config/webmux/config.toml
+Restart=on-failure
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now webmux
+loginctl enable-linger $USER     # 让用户服务在未登录时也运行
+```
+
+`Environment=PATH` 必须包含 `claude` / `codex` 的安装位置，否则预设命令找不到；文档里要明确提示用户检查 `which claude`。
+
+### 8.5 手机访问
+
+手机装 Tailscale 并登录同一账号 → 浏览器打开 `http://<机器 Tailscale 名或 IP>:7681` → 启用 token 时输入一次 → “添加到主屏幕”。iOS 上 Tailscale 作为 VPN 运行，Safari 直接访问 100.x.x.x 地址即可。
+
+## 9. 项目结构与实施计划
+
+### 9.1 目录结构
+
+```
+webmux/
+├── cmd/webmux/main.go           # 解析参数、加载配置、启动 http server、处理信号
+├── internal/
+│   ├── config/config.go         # TOML + flag 合并，默认值，校验
+│   ├── session/
+│   │   ├── manager.go           # Create / Get / List / Close / Remove / Subscribe(list)
+│   │   ├── session.go           # Session 结构、reader/waiter/ticker goroutine
+│   │   ├── ring.go              # RingBuffer
+│   │   ├── osc.go               # 增量 OSC title 状态机
+│   │   ├── status.go            # 状态探测 + prompt 模式
+│   │   ├── strip.go             # 去 ANSI、lastLine 提取
+│   │   └── proc_linux.go        # /proc 读取（build tag linux），proc_other.go 空实现
+│   ├── hub/
+│   │   ├── hub.go               # Attach / Detach，订阅者写合并
+│   │   └── subscriber.go
+│   ├── api/
+│   │   ├── router.go            # ServeMux 注册、中间件（auth、日志、recover）
+│   │   ├── sessions.go          # REST handlers
+│   │   ├── ws.go                # 两个 WebSocket handler
+│   │   ├── fs.go                # 目录补全、mkdir
+│   │   └── static.go            # embed.FS + SPA fallback
+│   └── web/embed.go             # //go:embed all:dist
+├── web/                         # 前端工程
+│   ├── index.html
+│   ├── src/
+│   │   ├── main.tsx
+│   │   ├── api.ts               # fetch 封装、token 注入
+│   │   ├── ws.ts                # 两类 WebSocket 客户端，含重连
+│   │   ├── pages/SessionList.tsx
+│   │   ├── pages/Terminal.tsx
+│   │   ├── components/SessionCard.tsx
+│   │   ├── components/NewSessionSheet.tsx
+│   │   ├── components/SoftKeys.tsx
+│   │   ├── hooks/useTerminal.ts
+│   │   ├── hooks/useViewport.ts  # visualViewport / 键盘处理
+│   │   └── styles.css
+│   ├── package.json
+│   └── vite.config.ts
+├── Makefile
+├── go.mod
+├── README.md
+└── deploy/webmux.service
+```
+
+### 9.2 里程碑
+
+按顺序实现，每个里程碑结束时都应该能运行并手工验证。
+
+| # | 里程碑 | 交付内容 | 验证方式 |
+| --- | --- | --- | --- |
+| M1 | 核心 Session | `session` 包：PTY 启动、ring、reader/waiter、Close；单元测试覆盖 ring 和 osc 状态机 | `go test ./...` 通过；一个临时 main 能启动 bash 并把输出打到 stdout |
+| M2 | 协议与 API | `api` + `hub`：REST 全部端点、两个 WebSocket、二进制帧协议、token 中间件 | `curl` 创建会话；用 `websocat` 附着并能交互；断开再附着能收到快照 |
+| M3 | 最小前端 | 终端页可用：xterm + fit + 重连回放；欢迎页能列出、新建、进入、关闭 | 桌面浏览器完整走通；杀掉浏览器标签后重开能看到历史 |
+| M4 | 状态与 title | OSC 解析、状态探测、lastLine 预览、列表实时更新 | 开 `claude` 后列表显示其 title；等待权限确认时状态变为“等待输入” |
+| M5 | 移动端打磨 | 软键栏、键盘视口处理、粘贴回退、字体缩放、PWA manifest、深色主题 | iOS Safari 和 Android Chrome 真机：能在 `claude` 里输入中文、按 Esc、粘贴多行、横竖屏切换 |
+| M6 | 打包与文档 | Makefile、交叉编译、systemd 文件、README（安装、配置、Tailscale 访问、FAQ） | 在一台干净的 Linux 上按 README 从零部署成功 |
+
+### 9.3 验收标准
+
+- [ ] 浏览器关闭 10 分钟后重新打开终端页，能看到这期间 `claude` 的全部输出（不超过缓冲上限）
+- [ ] 同一会话在手机和桌面同时打开，两边输出一致，任一端输入另一端可见
+- [ ] 手机锁屏 → 解锁后 3 秒内自动恢复连接，无需手动刷新
+- [ ] 欢迎页在 agent 停下等权限确认后 3 秒内显示“等待输入”状态
+- [ ] 新建会话选目录时能补全、能创建不存在的目录、能选预设 `claude` 并追加参数
+- [ ] 关闭会话后 Claude Code 进程及其子进程全部退出，无僵尸进程（`ps` 检查）
+- [ ] 软键栏 `Esc`、`Ctrl+C`、方向键在 Claude Code 的 TUI 里行为正确
+- [ ] iOS Safari 中输入 `--help` 不会被自动替换为破折号
+- [ ] 启动时 `listen=0.0.0.0` 且无 token 打印 WARN；带错误 token 的请求返回 401
+- [ ] `go vet`、`golangci-lint`（默认规则）、`npm run build` 零警告；`go test ./...` 通过
+- [ ] 20 个会话同时运行时服务进程 RSS < 100 MB
+
+### 9.4 后续可选扩展（不在本版本范围）
+
+- 会话手动重命名（`userTitle` 字段已预留）
+- 等待输入时通过 ntfy / Bark 推送通知到手机
+- 文件上传到会话 cwd、下载 cwd 下的文件
+- 守护进程 + 前端分离，支持服务热升级不丢会话
+- 分屏同时看两个会话
+
+## 10. 给 Agent 的实现指令
+
+把本文档整体交给编码 agent 时，附上以下指令作为开场。
+
+```markdown
+你要实现本文档描述的 WebMux。请严格按第 9.2 节的里程碑顺序推进，
+每完成一个里程碑就停下来汇报：做了什么、怎么验证的、下一步是什么。
+
+硬性要求：
+1. Go 1.22+，模块名 github.com/<owner>/webmux；只允许这些第三方依赖：
+   creack/pty、coder/websocket、BurntSushi/toml。需要别的先问我。
+2. 前端 Preact + TypeScript + Vite，依赖只允许：preact、@xterm/xterm、
+   @xterm/addon-fit、@xterm/addon-webgl。不要引入 UI 库和状态库。
+3. 第 6 节的协议是接口契约，前后端都按它实现，不要擅自改字段名或帧格式。
+4. 第 5.3 节的 RingBuffer 和第 5.4 节的 OSC 状态机必须有单元测试，
+   包括跨 chunk 拼接和缓冲回绕的用例。
+5. 所有 goroutine 必须能被 context 或 close(done) 干净地结束，用 
+   go test -race 跑测试。
+6. 任何 Linux 专有逻辑（/proc 读取）放在 _linux.go 文件里，其他平台给空实现，
+   保证 macOS 上 go build 通过。
+7. 不要实现第 9.4 节列出的扩展功能。
+8. 遇到文档没写清楚的地方，先按最简单的实现做，并在汇报里列出你做的假设。
+
+从 M1 开始。先给我看你对 internal/session 包的接口定义（不含实现），
+我确认后再写实现。
+```
+
+**常见坑提醒**（agent 容易犯的错，提前写在这里）：
+
+- `pty.Read` 在子进程退出后返回 `EIO`，这是正常的结束信号，不是错误
+- `cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}`：`creack/pty` 的 `StartWithSize` 已经处理了 `Setctty`，不要重复设置导致 `inappropriate ioctl`
+- 杀进程要杀进程组（`-pid`），否则 `claude` 启动的子进程会变孤儿
+- WebSocket 写必须串行，`coder/websocket` 的 `Write` 不是并发安全的，所有写都走订阅者的单个写 goroutine
+- xterm.js 的 `write` 是异步的，快照写完后要用回调再 `scrollToBottom`，否则会停在顶部
+- Vite 构建产物路径带 hash，`static.go` 的 SPA fallback 要对 `/assets/*` 返回 404 而不是 `index.html`，否则缺失资源会拿到 HTML 导致难以排查
+- `go:embed` 不能嵌入以 `_` 或 `.` 开头的文件，Vite 默认不生成这类文件，但 `.vite` 目录要排除
