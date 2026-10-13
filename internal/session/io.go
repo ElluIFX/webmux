@@ -47,6 +47,11 @@ func (s *Session) WriteContext(ctx context.Context, p []byte) error {
 	case <-s.inputGate:
 	}
 	defer func() { s.inputGate <- struct{}{} }()
+	// Cancellation and an available gate can both be selected. Never deliver
+	// input after cancellation merely because the gate happened to win.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	deadline := time.Now().Add(10 * time.Second)
 	if until, ok := ctx.Deadline(); ok && until.Before(deadline) {
 		deadline = until

@@ -28,19 +28,19 @@ func main() {
 		os.Exit(1)
 	}
 }
-func run() error {
+func loadConfig(args []string) (config.Config, error) {
 	flags := flag.NewFlagSet("webmux", flag.ContinueOnError)
 	path := flags.String("config", config.DefaultPath(), "TOML configuration path")
 	listen := flags.String("listen", "", "HTTP listen address")
 	token := flags.String("token", "", "optional shared token")
-	if err := flags.Parse(os.Args[1:]); err != nil {
-		return err
+	if err := flags.Parse(args); err != nil {
+		return config.Config{}, err
 	}
 	explicit := map[string]bool{}
 	flags.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	c, err := config.Load(*path, explicit["config"])
 	if err != nil {
-		return err
+		return c, err
 	}
 	if explicit["listen"] {
 		c.Listen = *listen
@@ -49,6 +49,14 @@ func run() error {
 		c.Token = *token
 	}
 	if err = c.Validate(); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+func run() error {
+	c, err := loadConfig(os.Args[1:])
+	if err != nil {
 		return err
 	}
 	host, _, _ := net.SplitHostPort(c.Listen)

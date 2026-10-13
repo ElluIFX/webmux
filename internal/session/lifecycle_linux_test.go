@@ -89,6 +89,9 @@ func TestCancelledPTYWriteDoesNotHoldInputGate(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if err = s.Resize(100, 40); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	timer := time.AfterFunc(100*time.Millisecond, cancel)
 	defer timer.Stop()

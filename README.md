@@ -43,17 +43,17 @@ chmod 600 ~/.config/webmux/config.toml
 curl -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:7681/api/health
 ```
 
-| 配置 | 默认 | 含义 |
-| --- | --- | --- |
-| `listen` | `127.0.0.1:7681` | HTTP / WebSocket 监听地址 |
-| `token` | 空 | 可选共享 token，空表示无认证 |
-| `scrollback_bytes` | `2097152` | 每会话保留最新 2 MiB 原始终端字节，不是精确行数 |
-| `default_cwd` | `~` | 新建会话默认目录，支持 `~` 展开 |
-| `shell` | `$SHELL` 或 `/bin/bash` | 默认 shell，以 `-l -i` 启动 |
-| `idle_after_seconds` | `30` | 无等待特征时的空闲阈值 |
-| `prompt_patterns` | 常见提示符 / 权限确认 | 可自定义的 Go 正则表达式列表 |
-| `allowed_origins` | `[]` | 附加允许的完整 Origin，例如 `https://myhost.example` |
-| `presets` | shell / claude / codex | argv 数组及 `allow_args`，配置列表替换默认列表 |
+| 配置                 | 默认                    | 含义                                                 |
+| -------------------- | ----------------------- | ---------------------------------------------------- |
+| `listen`             | `127.0.0.1:7681`        | HTTP / WebSocket 监听地址                            |
+| `token`              | 空                      | 可选共享 token，空表示无认证                         |
+| `scrollback_bytes`   | `2097152`               | 每会话保留最新 2 MiB 原始终端字节，不是精确行数      |
+| `default_cwd`        | `~`                     | 新建会话默认目录，支持 `~` 展开                      |
+| `shell`              | `$SHELL` 或 `/bin/bash` | 默认 shell，以 `-l -i` 启动                          |
+| `idle_after_seconds` | `30`                    | 无等待特征时的空闲阈值                               |
+| `prompt_patterns`    | 常见提示符 / 权限确认   | 可自定义的 Go 正则表达式列表                         |
+| `allowed_origins`    | `[]`                    | 附加允许的完整 Origin，例如 `https://myhost.example` |
+| `presets`            | shell / claude / codex  | argv 数组及 `allow_args`，配置列表替换默认列表       |
 
 预设不会自动安装 agent；`which claude`、`which codex` 必须能找到实际程序。追加参数按引号与反斜杠规则拆成 argv，不经 shell 求值。要更改 shell 的启动方式，可为 shell 预设显式设置 `cmd = ["/bin/zsh", "-l", "-i"]`。
 
@@ -128,6 +128,8 @@ OSC 0/2 title 支持 BEL / ST 与跨块拼接，创建时的手动名称优先�
 REST 与二进制 WebSocket 帧遵循设计文档第 6 节。补充只读 `GET /api/config` 返回 `{defaultCwd}`，不暴露 token。HTTP 接受 Bearer 或 `webmux_token` Cookie；WebSocket 也可用 query token。静态登录页面公开，所有 API / WebSocket 受认证保护。token 以定长摘要常量时间比较；浏览器 API / WebSocket 均校验同源或允许的 Origin。
 
 Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照与订阅在同一锁内切换，无回放缺口；慢客户端断开后可重连。PTY 使用 Go netpoll 支持的非阻塞描述符，断开连接能取消阻塞输入，不会关闭持久会话；每连接输入队列有上限，单次写入最长 10 秒。会话退出先清理子进程并排空 PTY，再发送退出帧。关闭先 SIGHUP，5 秒后 SIGKILL；Linux 按会话 ID、进程树与继承的 WEBMUX_SESSION_ID 找到其他 job-control 进程组，并用 subreaper 回收孤儿子进程，不因主进程先退出而取消清理。显式清掉环境再完全脱离会话的自守护程序不属于可靠可控的 PTY 子进程；本服务不是进程沙箱。不会把终端输入输出写入日志。
+
+输入在等待写入锁之前和获得锁之后都检查取消状态，避免已经断开的连接仍把排队输入写进 PTY。Origin 必须是完整的 HTTP(S) origin，不接受缺失主机、路径、query 或 fragment；API 不接受 query token。
 
 快照将类型前缀与缓冲内容组装到一次分配中；每连接复用最多 64 KiB 的输出合并工作区，避免每个小输出帧都重新分配大缓冲。共享 PTY 输出片段保持不可变，合并和 WebSocket 写入只由该连接的单个 writer 执行。
 

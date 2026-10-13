@@ -123,7 +123,7 @@ func (s *Server) originAllowed(r *http.Request) bool {
 		return true
 	}
 	u, err := url.Parse(origin)
-	if err != nil || u.User != nil || u.Path != "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if err != nil || u.User != nil || u.Host == "" || u.Path != "" || strings.ContainsAny(origin, "?#") || (u.Scheme != "http" && u.Scheme != "https") {
 		return false
 	}
 	scheme := "http"
