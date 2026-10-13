@@ -6,7 +6,8 @@
   "packageManager": "pnpm@12.11.2",
   "scripts": {
     "build": "tsc --noEmit && vite build",
-    "dev": "vite --host 127.0.0.1"
+    "dev": "vite --host 127.0.0.1",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "preact": "^10.27.2",

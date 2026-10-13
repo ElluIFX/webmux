@@ -61,12 +61,12 @@ export function NewSessionSheet({
     setBusy(true);
     setError("");
     try {
-    const payload = {
-      cwd,
-      preset,
-      args: chosen?.allowArgs ? parseArgs(args) : [],
-      name,
-    };
+      const payload = {
+        cwd,
+        preset,
+        args: chosen?.allowArgs ? parseArgs(args) : [],
+        name,
+      };
       let session: SessionInfo;
       try {
         session = await api<SessionInfo>("/sessions", "POST", payload);
@@ -74,6 +74,7 @@ export function NewSessionSheet({
         if (
           err instanceof APIError &&
           err.status === 400 &&
+          err.message.startsWith("directory:") &&
           err.message.includes("no such file or directory") &&
           confirm("目录不存在，是否创建？")
         ) {

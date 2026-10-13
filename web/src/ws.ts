@@ -50,9 +50,16 @@ export function connect(
     next.onerror = () => next.close();
   }
   const visible = () => {
-    if (!document.hidden && socket?.readyState !== WebSocket.OPEN) open();
+    // A suspended mobile socket may still claim OPEN after the network died.
+    // Always reattach on foregrounding; the server replay is the source of truth.
+    if (!document.hidden && !finished) open();
   };
   document.addEventListener("visibilitychange", visible);
+  const online = () => {
+    if (socket?.readyState !== WebSocket.OPEN) open();
+  };
+  window.addEventListener("online", online);
+  window.addEventListener("pageshow", visible);
   open();
   return {
     send(kind: number, payload: Uint8Array) {
@@ -68,6 +75,8 @@ export function connect(
       clearTimeout(timer);
       socket?.close();
       document.removeEventListener("visibilitychange", visible);
+      window.removeEventListener("online", online);
+      window.removeEventListener("pageshow", visible);
     },
     reconnect: open,
   };

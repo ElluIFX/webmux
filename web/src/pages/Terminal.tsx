@@ -1,21 +1,19 @@
 import { useState } from "preact/hooks";
-import { api, navigate, statusText } from "../api";
+import { api, apiBuffer, navigate, statusText } from "../api";
 import { closeSession } from "../components/SessionCard";
 import { useTerminal } from "../hooks/useTerminal";
+import { SoftKeys } from "../components/SoftKeys";
+import { useViewport } from "../hooks/useViewport";
 export function TerminalPage({ id }: { id: string }) {
   const t = useTerminal(id);
+  const height = useViewport();
   const [menu, setMenu] = useState(false),
     [error, setError] = useState(""),
-    [copyText, setCopyText] = useState<string | null>(null);
+    [copyText, setCopyText] = useState<string | null>(null),
+    [pasteText, setPasteText] = useState<string | null>(null);
   async function copy() {
     try {
-      const response = await fetch(`/api/sessions/${id}/buffer`, {
-        headers: {
-          Authorization: "Bearer " + localStorage.getItem("webmux.token"),
-        },
-      });
-      if (!response.ok) throw new Error("无法读取缓冲");
-      const text = await response.text();
+      const text = new TextDecoder().decode(await apiBuffer(id));
       try {
         await navigator.clipboard.writeText(text);
       } catch {
@@ -25,8 +23,15 @@ export function TerminalPage({ id }: { id: string }) {
       setError((err as Error).message);
     }
   }
+  async function paste() {
+    try {
+      t.paste(await navigator.clipboard.readText());
+    } catch {
+      setPasteText("");
+    }
+  }
   return (
-    <div class="terminal-page">
+    <div class="terminal-page" style={{ height: `${height}px` }}>
       <header class="terminal-header">
         <button
           class="back"
@@ -108,9 +113,9 @@ export function TerminalPage({ id }: { id: string }) {
           </button>
         </div>
       )}
-      {error && (
+      {(error || t.error) && (
         <div class="error" role="alert">
-          {error}
+          {error || t.error}
         </div>
       )}
       {t.connection === "missing" && (
@@ -143,6 +148,58 @@ export function TerminalPage({ id }: { id: string }) {
           </div>
         )}
       </div>
+      <SoftKeys
+        send={t.send}
+        modifiers={t.modifiers}
+        toggle={t.toggleModifier}
+        paste={() => void paste()}
+        keyboard={t.keyboard}
+      />
+      {pasteText !== null && (
+        <div class="modal-backdrop">
+          <section
+            class="sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="paste-title"
+          >
+            <h2 id="paste-title">粘贴到终端</h2>
+            <p class="muted">
+              当前环境无法直接读取剪贴板，请在下方粘贴。多行文本遵循终端的
+              bracketed paste 模式。
+            </p>
+            <textarea
+              autoFocus
+              aria-label="粘贴内容"
+              value={pasteText}
+              onInput={(e) => setPasteText(e.currentTarget.value)}
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck={false}
+            />
+            <footer>
+              <button
+                onClick={() => {
+                  setPasteText(null);
+                  t.focus();
+                }}
+              >
+                取消
+              </button>
+              <button
+                class="primary"
+                onClick={() => {
+                  t.paste(pasteText);
+                  setPasteText(null);
+                  t.focus();
+                }}
+              >
+                发送
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
       {copyText !== null && (
         <div class="modal-backdrop">
           <section class="sheet">

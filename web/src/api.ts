@@ -41,11 +41,11 @@ export function store(key: string, value: string) {
     /* private-mode storage is optional */
   }
 }
-export async function api<T>(
+async function request(
   path: string,
   method = "GET",
   body?: unknown,
-): Promise<T> {
+): Promise<Response> {
   const response = await fetch("/api" + path, {
     method,
     headers: {
@@ -61,8 +61,21 @@ export async function api<T>(
     if (response.status === 401) window.dispatchEvent(new Event("webmux:auth"));
     throw new APIError(response.status, detail.error);
   }
+  return response;
+}
+export async function api<T>(
+  path: string,
+  method = "GET",
+  body?: unknown,
+): Promise<T> {
+  const response = await request(path, method, body);
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+export async function apiBuffer(id: string): Promise<Uint8Array> {
+  return new Uint8Array(
+    await (await request(`/sessions/${id}/buffer`)).arrayBuffer(),
+  );
 }
 export function navigate(path: string) {
   history.pushState(null, "", path);
