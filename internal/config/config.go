@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 )
 
 type Config struct {
@@ -76,5 +77,5 @@ func (c *Config) Validate() error {
 	return nil
 }
 func (c Config) SessionOptions() session.Options {
-	return session.Options{ScrollbackBytes: c.ScrollbackBytes, DefaultCwd: c.DefaultCwd, Presets: c.Presets}
+	return session.Options{ScrollbackBytes: c.ScrollbackBytes, DefaultCwd: c.DefaultCwd, Presets: c.Presets, IdleAfter: time.Duration(c.IdleAfterSeconds) * time.Second, PromptPatterns: c.PromptPatterns}
 }

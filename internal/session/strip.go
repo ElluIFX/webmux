@@ -32,8 +32,10 @@ func (s *Preview) Feed(p []byte) string {
 			switch b {
 			case '[':
 				s.state = 2
-			case ']':
+			case ']', 'P', '^', '_', 'X':
 				s.state = 3
+			case '(', ')', '*', '+':
+				s.state = 5
 			default:
 				s.state = 0
 			}
@@ -53,6 +55,8 @@ func (s *Preview) Feed(p []byte) string {
 			} else {
 				s.state = 3
 			}
+		case 5:
+			s.state = 0
 		}
 	}
 	s.consume(clean)

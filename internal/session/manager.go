@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,8 @@ type Options struct {
 	ScrollbackBytes int
 	DefaultCwd      string
 	Presets         []Preset
+	IdleAfter       time.Duration
+	PromptPatterns  []string
 }
 type Event struct {
 	Type     string `json:"type"`
@@ -42,6 +45,7 @@ type Manager struct {
 	sessions map[string]*Session
 	subs     map[*ListSubscriber]struct{}
 	options  Options
+	patterns []*regexp.Regexp
 	dirty    chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
@@ -55,7 +59,16 @@ func NewManager(o Options) *Manager {
 	if o.ScrollbackBytes == 0 {
 		o.ScrollbackBytes = 2 * 1024 * 1024
 	}
+	if o.IdleAfter == 0 {
+		o.IdleAfter = 30 * time.Second
+	}
+	if o.PromptPatterns == nil {
+		o.PromptPatterns = []string{`[$#%>❯›?:]\s*$`, `(?i)\(y/n\)|\[y/n\]|yes.*no|press enter`}
+	}
 	m := &Manager{sessions: make(map[string]*Session), subs: make(map[*ListSubscriber]struct{}), options: o, dirty: make(chan struct{}, 1), done: make(chan struct{})}
+	for _, pattern := range o.PromptPatterns {
+		m.patterns = append(m.patterns, regexp.MustCompile(pattern))
+	}
 	go m.updates()
 	return m
 }
@@ -192,6 +205,9 @@ func (m *Manager) publishLocked(e Event) {
 func (m *Manager) updates() {
 	timer := time.NewTicker(500 * time.Millisecond)
 	defer timer.Stop()
+	previous := make(map[string]Info)
+	lineSent := make(map[string]time.Time)
+	lastProbe := time.Time{}
 	dirty := false
 	for {
 		select {
@@ -199,16 +215,43 @@ func (m *Manager) updates() {
 			return
 		case <-m.dirty:
 			dirty = true
-		case <-timer.C:
-			if dirty {
-				m.mu.Lock()
-				for _, s := range m.sessions {
-					info := s.Info()
-					m.publishLocked(Event{Type: "updated", Session: &info})
-				}
-				m.mu.Unlock()
-				dirty = false
+		case now := <-timer.C:
+			probe := now.Sub(lastProbe) >= time.Second
+			if !dirty && !probe {
+				continue
 			}
+			var table processTable
+			if probe {
+				table = processes()
+				lastProbe = now
+			}
+			m.mu.Lock()
+			for id, s := range m.sessions {
+				if probe {
+					s.evaluate(now, table, m.options.IdleAfter, m.patterns)
+				}
+				info := s.Info()
+				old, known := previous[id]
+				if known && now.Sub(lineSent[id]) < 2*time.Second {
+					info.LastLine = old.LastLine
+				}
+				if !known || !sameDisplay(old, info) {
+					m.publishLocked(Event{Type: "updated", Session: &info})
+					s.publishState()
+					if !known || old.LastLine != info.LastLine {
+						lineSent[id] = now
+					}
+					previous[id] = info
+				}
+			}
+			for id := range previous {
+				if _, exists := m.sessions[id]; !exists {
+					delete(previous, id)
+					delete(lineSent, id)
+				}
+			}
+			m.mu.Unlock()
+			dirty = false
 		}
 	}
 }

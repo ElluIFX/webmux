@@ -43,21 +43,20 @@ type Subscriber struct {
 	failed bool
 }
 type Session struct {
-	mu             sync.Mutex
-	inputMu        sync.Mutex
-	info           Info
-	userTitle      string
-	terminal       *os.File
-	cmd            *exec.Cmd
-	ring           *RingBuffer
-	osc            OSCScanner
-	preview        Preview
-	subs           map[*Subscriber]struct{}
-	done           chan struct{}
-	readerDone     chan struct{}
-	closeOnce      sync.Once
-	notify         func()
-	closeRequested bool
+	mu         sync.Mutex
+	inputMu    sync.Mutex
+	info       Info
+	userTitle  string
+	terminal   *os.File
+	cmd        *exec.Cmd
+	ring       *RingBuffer
+	osc        OSCScanner
+	preview    Preview
+	subs       map[*Subscriber]struct{}
+	done       chan struct{}
+	readerDone chan struct{}
+	closeOnce  sync.Once
+	notify     func()
 }
 
 func start(id, cwd, preset, name string, argv []string, capacity int, notify func()) (*Session, error) {

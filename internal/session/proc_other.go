@@ -1,0 +1,8 @@
+//go:build !linux
+
+package session
+
+type processTable struct{}
+
+func processes() processTable                      { return processTable{} }
+func foregroundBlocked(_ int, _ processTable) bool { return false }
