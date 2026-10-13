@@ -1,0 +1,318 @@
+package api
+
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"github.com/coder/websocket"
+	"github.com/rainchan/webmux/internal/config"
+	"github.com/rainchan/webmux/internal/hub"
+	"github.com/rainchan/webmux/internal/session"
+	assets "github.com/rainchan/webmux/web"
+	"io"
+	"io/fs"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+)
+
+type Server struct {
+	Config  config.Config
+	Manager *session.Manager
+}
+
+func New(c config.Config, m *session.Manager) http.Handler {
+	s := &Server{c, m}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, 200, map[string]any{"ok": true, "sessions": len(m.List())})
+	})
+	mux.HandleFunc("GET /api/presets", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, c.Presets) })
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, 200, map[string]string{"defaultCwd": c.DefaultCwd})
+	})
+	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, m.List()) })
+	mux.HandleFunc("POST /api/sessions", s.create)
+	mux.HandleFunc("GET /api/sessions/{id}", s.get)
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.delete)
+	mux.HandleFunc("GET /api/sessions/{id}/buffer", s.buffer)
+	mux.HandleFunc("GET /api/fs/dirs", s.dirs)
+	mux.HandleFunc("POST /api/fs/mkdir", s.mkdir)
+	mux.HandleFunc("GET /ws/sessions", s.listWS)
+	mux.HandleFunc("GET /ws/s/{id}", s.terminalWS)
+	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	mux.HandleFunc("GET /ws/", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
+	mux.HandleFunc("GET /", s.static)
+	return s.middleware(mux)
+}
+func reply(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+func failure(w http.ResponseWriter, status int, err error) {
+	reply(w, status, map[string]string{"error": err.Error()})
+}
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 65536)
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		failure(w, 400, err)
+		return false
+	}
+	var extra any
+	if err := d.Decode(&extra); err != io.EOF {
+		failure(w, 400, errors.New("expected one JSON object"))
+		return false
+	}
+	return true
+}
+func (s *Server) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Error("request panic", "panic", p)
+				http.Error(w, "internal error", 500)
+			}
+		}()
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") {
+			if !s.authorized(r) {
+				failure(w, 401, errors.New("authentication required"))
+				return
+			}
+			if !s.originAllowed(r) {
+				failure(w, 403, errors.New("origin not allowed"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+func (s *Server) authorized(r *http.Request) bool {
+	if s.Config.Token == "" {
+		return true
+	}
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		if cookie, err := r.Cookie("webmux_token"); err == nil {
+			token = cookie.Value
+		}
+	}
+	if token == "" && strings.HasPrefix(r.URL.Path, "/ws/") {
+		token = r.URL.Query().Get("token")
+	}
+	want := sha256.Sum256([]byte(s.Config.Token))
+	got := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+func (s *Server) originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.User != nil || u.Path != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if u.Host == r.Host && u.Scheme == scheme {
+		return true
+	}
+	for _, allowed := range s.Config.AllowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+	return false
+}
+func (s *Server) create(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Cwd    string   `json:"cwd"`
+		Preset string   `json:"preset"`
+		Args   []string `json:"args"`
+		Name   string   `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	item, err := s.Manager.Create(req.Cwd, req.Preset, req.Args, req.Name)
+	if err != nil {
+		failure(w, 400, err)
+		return
+	}
+	reply(w, 201, item.Info())
+}
+func (s *Server) find(w http.ResponseWriter, r *http.Request) *session.Session {
+	item, err := s.Manager.Get(r.PathValue("id"))
+	if err != nil {
+		failure(w, 404, err)
+		return nil
+	}
+	return item
+}
+func (s *Server) get(w http.ResponseWriter, r *http.Request) {
+	if item := s.find(w, r); item != nil {
+		reply(w, 200, item.Info())
+	}
+}
+func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	var err error
+	if r.URL.Query().Get("remove") == "1" {
+		err = s.Manager.Remove(r.PathValue("id"))
+	} else {
+		err = s.Manager.Close(r.PathValue("id"))
+	}
+	if err != nil {
+		status := 404
+		if errors.Is(err, session.ErrRunning) {
+			status = 409
+		}
+		failure(w, status, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+func (s *Server) buffer(w http.ResponseWriter, r *http.Request) {
+	if item := s.find(w, r); item != nil {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(item.Buffer())
+	}
+}
+func (s *Server) dirs(w http.ResponseWriter, r *http.Request) {
+	prefix := r.URL.Query().Get("prefix")
+	if prefix == "" {
+		prefix = s.Config.DefaultCwd + string(os.PathSeparator)
+	}
+	expanded, err := session.ExpandPath(prefix)
+	if err != nil {
+		failure(w, 400, err)
+		return
+	}
+	dir, base := filepath.Split(expanded)
+	if strings.HasSuffix(prefix, "/") || prefix == "~" {
+		dir = expanded
+		base = ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		failure(w, 400, err)
+		return
+	}
+	out := make([]string, 0, 20)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), base) {
+			continue
+		}
+		full := filepath.Join(dir, entry.Name())
+		stat, err := os.Stat(full)
+		if err == nil && stat.IsDir() {
+			out = append(out, full)
+			if len(out) == 20 {
+				break
+			}
+		}
+	}
+	reply(w, 200, out)
+}
+func (s *Server) mkdir(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.Path == "" {
+		failure(w, 400, errors.New("path required"))
+		return
+	}
+	p, err := session.ExpandPath(req.Path)
+	if err == nil {
+		err = os.MkdirAll(p, 0755)
+	}
+	if err != nil {
+		failure(w, 400, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+func (s *Server) accept(w http.ResponseWriter, r *http.Request) *websocket.Conn {
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	if err != nil {
+		return nil
+	}
+	return c
+}
+func (s *Server) listWS(w http.ResponseWriter, r *http.Request) {
+	if c := s.accept(w, r); c != nil {
+		hub.List(r.Context(), s.Manager, c)
+	}
+}
+func (s *Server) terminalWS(w http.ResponseWriter, r *http.Request) {
+	item, err := s.Manager.Get(r.PathValue("id"))
+	c := s.accept(w, r)
+	if c == nil {
+		return
+	}
+	if err != nil {
+		_ = c.Close(4404, "session not found")
+		return
+	}
+	hub.Attach(r.Context(), item, c)
+}
+func (s *Server) static(w http.ResponseWriter, r *http.Request) {
+	root, err := fs.Sub(assets.Assets, "dist")
+	if err != nil {
+		http.Error(w, "frontend build unavailable", 503)
+		return
+	}
+	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	if strings.HasPrefix(name, ".") || strings.Contains(name, "/.") {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := fs.ReadFile(root, name)
+	if err != nil {
+		if strings.HasPrefix(name, "assets/") || path.Ext(name) != "" {
+			http.NotFound(w, r)
+			return
+		}
+		name = "index.html"
+		data, err = fs.ReadFile(root, name)
+	}
+	if err != nil {
+		http.Error(w, "run make web before building", 503)
+		return
+	}
+	switch path.Ext(name) {
+	case ".html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	case ".js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	case ".css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case ".webmanifest":
+		w.Header().Set("Content-Type", "application/manifest+json")
+	case ".svg":
+		w.Header().Set("Content-Type", "image/svg+xml")
+	}
+	if strings.HasPrefix(name, "assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+	_, _ = w.Write(data)
+}

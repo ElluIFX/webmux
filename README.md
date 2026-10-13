@@ -13,3 +13,15 @@ go test -race ./...
 ```
 
 前端包管理使用 pnpm，不使用 npm 安装依赖。
+
+## API 与认证
+
+REST 与二进制 WebSocket 帧遵循设计文档第 6 节。`GET /api/config` 仅补充返回 `{defaultCwd}`，让浏览器读取配置默认目录，不暴露 token。HTTP 使用 Bearer 或 `webmux_token` Cookie；WebSocket 也支持 query token。静态登录页面公开，所有 API / WebSocket 需要认证。浏览器跨域 API 与 WebSocket 请求均校验 Origin；反向代理应保持 Host，HTTPS 代理需把公开 Origin 加入 `allowed_origins`。
+
+开发要求 Go 1.23+（当前 websocket 依赖的最低版本）；服务默认监听 `127.0.0.1:7681`。启动示例：
+
+```sh
+go build -o bin/webmux ./cmd/webmux
+./bin/webmux --listen 127.0.0.1:7681 --token YOUR_TOKEN
+curl -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:7681/api/health
+```
