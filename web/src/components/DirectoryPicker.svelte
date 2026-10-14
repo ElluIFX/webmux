@@ -1,0 +1,184 @@
+<script lang="ts">
+  import { tick } from "svelte";
+  import RiFolderLine from "remixicon-svelte/icons/folder-line";
+  import RiArrowUpLine from "remixicon-svelte/icons/arrow-up-line";
+  import RiHomeLine from "remixicon-svelte/icons/home-line";
+  import { api } from "../api";
+  import { DirectoriesSchema } from "../schemas";
+  import { Button } from "$lib/components/ui/button";
+  import * as Popover from "$lib/components/ui/popover";
+  import * as Command from "$lib/components/ui/command";
+
+  let { value = $bindable("") }: { value: string } = $props();
+  let open = $state(false);
+  let query = $state("");
+  let selected = $state("");
+  let input = $state<HTMLInputElement | null>(null);
+  let directories = $state<string[]>([]);
+  let loading = $state(false);
+  let error = $state("");
+  let showHidden = $state(false);
+  const current = $derived(
+    query === "~" ? "~/" : query.slice(0, query.lastIndexOf("/") + 1) || "./",
+  );
+  const visible = $derived(
+    directories.filter(
+      (dir) =>
+        showHidden ||
+        query.split("/").pop()?.startsWith(".") ||
+        !dir.split("/").pop()?.startsWith("."),
+    ),
+  );
+
+  function startBrowse(nextOpen: boolean) {
+    if (nextOpen) {
+      query = (value || "~").replace(/\/+$/, "") + "/";
+      selected = "";
+    }
+  }
+
+  async function enter(dir: string) {
+    query = dir.replace(/\/+$/, "") + "/";
+    selected = "";
+    await tick();
+    input?.focus();
+  }
+
+  function parent() {
+    const path = current.replace(/\/+$/, "");
+    void enter(path.slice(0, path.lastIndexOf("/")) || "/");
+  }
+
+  function choose() {
+    value = current === "/" ? "/" : current.replace(/\/+$/, "");
+    open = false;
+  }
+
+  $effect(() => {
+    if (!open) return;
+    const prefix = query;
+    let active = true;
+    directories = [];
+    selected = "";
+    loading = true;
+    error = "";
+    const timer = setTimeout(() => {
+      void api(
+        "/fs/dirs?prefix=" + encodeURIComponent(prefix),
+        DirectoriesSchema,
+      )
+        .then((result) => {
+          if (active) directories = result;
+        })
+        .catch((err) => {
+          if (active) error = (err as Error).message;
+        })
+        .finally(() => {
+          if (active) loading = false;
+        });
+    }, 150);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  });
+</script>
+
+<Popover.Root bind:open onOpenChange={startBrowse}>
+  <Popover.Trigger>
+    {#snippet child({ props })}
+      <Button {...props} variant="outline" aria-label="浏览目录">浏览</Button>
+    {/snippet}
+  </Popover.Trigger>
+  <Popover.Content
+    class="w-[min(90vw,520px)] p-0"
+    align="end"
+    onOpenAutoFocus={(event) => {
+      event.preventDefault();
+      input?.focus();
+    }}
+  >
+    <Command.Root shouldFilter={false} bind:value={selected}>
+      <div class="flex items-center gap-1 border-b px-2 py-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="上一级目录"
+          title="上一级目录（Alt+↑）"
+          disabled={current === "/"}
+          onclick={parent}><RiArrowUpLine class="size-4" /></Button
+        >
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="用户主目录"
+          onclick={() => enter("~")}><RiHomeLine class="size-4" /></Button
+        >
+        <span class="min-w-0 flex-1 truncate font-mono text-xs" title={current}
+          >{current}</span
+        >
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-pressed={showHidden}
+          onclick={() => (showHidden = !showHidden)}
+          >{showHidden ? "隐藏点目录" : "显示隐藏目录"}</Button
+        >
+      </div>
+      <Command.Input
+        bind:value={query}
+        bind:ref={input}
+        placeholder="输入路径，或筛选目录…"
+        aria-label="目录路径"
+        autocapitalize="off"
+        autocorrect="off"
+        spellcheck={false}
+        onkeydown={(event) => {
+          if (event.altKey && event.key === "ArrowUp") {
+            event.preventDefault();
+            event.stopPropagation();
+            parent();
+          } else if (event.key === "Tab" && !event.shiftKey && selected) {
+            event.preventDefault();
+            void enter(selected);
+          }
+        }}
+      />
+      <Command.List class="max-h-[min(45dvh,320px)]">
+        <Command.Empty>
+          {loading
+            ? "正在读取目录…"
+            : error
+              ? "无法读取目录"
+              : "没有匹配的子目录"}
+        </Command.Empty>
+        {#each visible as dir (dir)}
+          <Command.Item value={dir} onSelect={() => enter(dir)}>
+            <RiFolderLine class="size-4 text-muted-foreground" />
+            <span class="min-w-0 flex-1 truncate" title={dir}
+              >{dir.split("/").pop() || "/"}</span
+            >
+            <span class="text-muted-foreground" aria-hidden="true">›</span>
+          </Command.Item>
+        {/each}
+      </Command.List>
+    </Command.Root>
+    {#if error}<p role="alert" class="px-3 py-2 text-xs text-destructive">
+        {error}
+      </p>{/if}
+    <div class="flex items-center justify-between gap-2 border-t p-2">
+      <span class="text-xs text-muted-foreground"
+        >↑↓ 选择 · Enter / Tab 进入</span
+      >
+      <Button
+        type="button"
+        size="sm"
+        disabled={loading || !!error}
+        onclick={choose}>选择当前目录</Button
+      >
+    </div>
+  </Popover.Content>
+</Popover.Root>

@@ -14,7 +14,7 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 
 - 会话在浏览器断开后继续存活，重连后恢复完整滚动缓冲
 - 欢迎页展示所有会话及其标题、工作目录、状态（运行中 / 等待输入 / 空闲 / 已退出）
-- 新建会话时可选工作目录和预设启动命令（如 `claude`、`codex`）
+- 新建会话时可选工作目录和预设启动命令（如 `claude`、`codex`、`omp`），也可输入自定义命令
 - 手机 / 平板浏览器上可用：响应式布局、虚拟键盘友好、必要的软键（Esc、Ctrl、方向键、Tab 等）
 - 单二进制部署，前端静态资源嵌入，`systemd` 一条服务即可运行
 
@@ -42,7 +42,7 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 | 服务重启   | 会话随服务退出                                    | 不做状态落盘，不做守护进程分离；进程内存即状态              |
 | 欢迎页     | 列出所有会话，显示 title、目录、状态              | 需要会话状态探测与 title 探测                               |
 | 会话 title | 优先终端 OSC 0/2 设置的 title，没有则用工作目录名 | 服务端解析 PTY 输出流中的 OSC 序列                          |
-| 新建会话   | 选工作目录 + 可选预设启动命令                     | 预设列表来自配置文件，默认含 shell、claude、codex           |
+| 新建会话   | 选工作目录 + 预设或自定义启动命令                 | 预设列表来自配置文件，默认含 shell、claude、codex、omp      |
 | 会话状态   | 运行中 / 等待输入 / 空闲 / 已退出                 | 基于输出活跃度 + 前台进程启发式判断                         |
 | 移动端     | 手机 / 平板浏览器可用                             | 响应式布局、软键栏、触摸滚动、粘贴                          |
 
@@ -83,8 +83,8 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 
 从欢迎页点击“新建会话”弹出底部抽屉（移动端）或居中对话框（桌面端），包含：
 
-1. **工作目录**：文本输入框，带目录补全下拉（输入时请求 `/api/fs/dirs?prefix=`），默认值为上一次使用的目录，支持 `~` 展开；旁边列出最近使用过的 5 个目录快捷选项
-2. **启动命令**：单选芯片，来自配置文件 `presets`，默认提供：`shell`（用户默认 shell）、`claude`、`codex`；选中后显示实际命令行，允许在文本框中追加参数（如 `claude --resume`）
+1. **工作目录**：文本输入框，默认值为上一次使用的目录，支持 `~` 展开；旁边列出最近使用过的 5 个目录快捷选项。浏览按钮打开路径选择器：输入前缀过滤，↑↓ 选择，Enter / Tab 进入子目录，Alt+↑ 返回上级，支持返回主目录；点击“选择当前目录”确认。完整目录列表可滚动，普通目录优先，点目录可切换显示，输入点目录前缀时直接显示匹配结果。
+2. **启动命令**：单选芯片，来自配置文件 `presets`，默认提供 `shell`（用户默认 shell）、`claude`、`codex`、`omp`；选中后显示实际命令行，允许按配置追加参数。另有“自定义”输入完整命令，支持引号和转义，保存上次输入。直接执行 argv，不隐式求值 shell 语法；管道、变量等须显式使用 `bash -lc '命令'`。
 3. **会话名称**（可选）：留空则自动 title
 4. 确认按钮：创建成功后直接跳转终端页
 
@@ -192,8 +192,8 @@ type Session struct {
 
 ### 5.2 创建与运行
 
-1. `Manager.Create(cwd, preset, extraArgs, name)`：校验 `cwd` 存在且是目录（相对路径和 `~` 在前端已展开，后端再做一次 `filepath.Abs`）
-2. 组装命令：preset 在配置中定义为 argv 数组，`extraArgs` 追加其后；`shell` 预设取 `$SHELL`，为空则 `/bin/bash`，以登录交互方式启动（`-l -i` 可配置）
+1. `Manager.Create(cwd, preset, cmd, extraArgs, name)`：校验 `cwd` 存在且是目录，后端展开 `~` 并用 `filepath.Abs` 规范化。
+2. 组装命令：预设在配置中定义为 argv 数组，`extraArgs` 追加其后；`shell` 预设取 `$SHELL`，为空则 `/bin/bash`，以登录交互方式启动（`-l -i` 可配置）。`preset = "custom"` 时直接使用非空 `cmd` argv，不接受非空 `extraArgs`；普通预设不接受 `cmd`。配置预设不能使用保留名称 `custom`。
 3. 环境变量：继承服务进程环境，并显式设置 `TERM=xterm-256color`、`COLORTERM=truecolor`、`LANG`（继承）、`WEBMUX_SESSION_ID=<id>`
 4. `pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})` 启动；初始尺寸随后由第一个附着的客户端 resize 覆盖
 5. 启动三个 goroutine：
@@ -268,25 +268,25 @@ else → waiting   // 2–30s 无输出且判断不出来，倾向提示用户�
 
 ### 6.1 HTTP API
 
-| 方法   | 路径                              | 说明                         | 请求 / 响应                                                                                        |
-| ------ | --------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------- |
-| GET    | `/api/sessions`                   | 列出会话                     | 响应 `SessionInfo[]`，按 `lastActiveAt` 倒序                                                       |
-| POST   | `/api/sessions`                   | 创建会话                     | 请求 `{cwd, preset, args?: string[], name?}`；201 返回 `SessionInfo`；400 目录不存在 / preset 未知 |
-| GET    | `/api/sessions/{id}`              | 单个会话信息                 | `SessionInfo`；404                                                                                 |
-| DELETE | `/api/sessions/{id}`              | 关闭会话（SIGHUP → SIGKILL） | 204                                                                                                |
-| DELETE | `/api/sessions/{id}?remove=1`     | 从列表移除已退出会话         | 204；409 会话仍在运行                                                                              |
-| GET    | `/api/sessions/{id}/buffer`       | 下载完整缓冲（原始字节）     | `application/octet-stream`，用于“复制全部”                                                         |
-| GET    | `/api/presets`                    | 预设列表                     | `Preset[]`                                                                                         |
-| GET    | `/api/fs/dirs?prefix=/home/u/pro` | 目录补全                     | 最多 20 个匹配的子目录绝对路径                                                                     |
-| POST   | `/api/fs/mkdir`                   | 创建目录                     | `{path}`；204                                                                                      |
-| GET    | `/api/health`                     | 健康检查                     | `{ok: true, sessions: n}`                                                                          |
+| 方法   | 路径                              | 说明                         | 请求 / 响应                                                                                                                                                         |
+| ------ | --------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/sessions`                   | 列出会话                     | 响应 `SessionInfo[]`，按 `lastActiveAt` 倒序                                                                                                                        |
+| POST   | `/api/sessions`                   | 创建会话                     | 预设请求 `{cwd, preset, args?: string[], name?}`；自定义请求 `{cwd, preset: "custom", cmd: string[], name?}`；201 返回 `SessionInfo`；400 目录 / 命令错误或字段冲突 |
+| GET    | `/api/sessions/{id}`              | 单个会话信息                 | `SessionInfo`；404                                                                                                                                                  |
+| DELETE | `/api/sessions/{id}`              | 关闭会话（SIGHUP → SIGKILL） | 204                                                                                                                                                                 |
+| DELETE | `/api/sessions/{id}?remove=1`     | 从列表移除已退出会话         | 204；409 会话仍在运行                                                                                                                                               |
+| GET    | `/api/sessions/{id}/buffer`       | 下载完整缓冲（原始字节）     | `application/octet-stream`，用于“复制全部”                                                                                                                          |
+| GET    | `/api/presets`                    | 预设列表                     | `Preset[]`                                                                                                                                                          |
+| GET    | `/api/fs/dirs?prefix=/home/u/pro` | 目录补全                     | 全部匹配子目录的绝对路径（包含符号链接目录），普通目录优先、各组按名称排序；无静默截断                                                                              |
+| POST   | `/api/fs/mkdir`                   | 创建目录                     | `{path}`；204                                                                                                                                                       |
+| GET    | `/api/health`                     | 健康检查                     | `{ok: true, sessions: n}`                                                                                                                                           |
 
 ```ts
 interface SessionInfo {
   id: string;
   title: string; // 已按优先级算好
   cwd: string;
-  preset: string; // "shell" | "claude" | "codex" | 自定义
+  preset: string; // "shell" | "claude" | "codex" | "omp" | "custom" | 配置中的预设名称
   cmd: string[];
   status: "running" | "waiting" | "idle" | "exited";
   exitCode: number | null;
@@ -366,7 +366,7 @@ interface Preset {
 - 会话列表保存在 Svelte `$state` 数组中，事件经 Zod discriminated union 校验后按 id 更新
 - 卡片组件 `SessionCard`：标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、目录、预设名、相对时间（每 30 秒刷新一次）、`lastLine` 单行等宽字体预览
 - 空状态：没有会话时显示“还没有会话”和一个大按钮“新建会话”
-- `NewSessionSheet`：移动端使用 shadcn Drawer，桌面端使用 Dialog；字段见产品设计 3.2。目录输入 `debounce 200ms` 请求 `/api/fs/dirs`，使用 Popover + Command 浏览补全结果；最近目录存 localStorage `webmux.recentDirs`（最多 10 个）
+- `NewSessionSheet`：移动端使用 shadcn Drawer，桌面端使用 Dialog；字段见产品设计 3.2。`DirectoryPicker` 使用 Popover + Command，仅打开时按路径输入 `debounce 150ms` 请求 `/api/fs/dirs`，支持键盘导航、确认当前目录、隐藏目录切换、加载与错误状态；浏览中的路径与表单工作目录分离。最近目录存 localStorage `webmux.recentDirs`（最多 10 个），自定义命令存 `webmux.customCommand`。
 - WebSocket 断开时顶部显示黄色细条“连接已断开，重连中…”，自动重连
 
 ### 7.3 TerminalPage
@@ -460,6 +460,12 @@ allow_args = true
 name = "codex"
 label = "Codex CLI"
 cmd = ["codex"]
+allow_args = true
+
+[[presets]]
+name = "omp"
+label = "omp"
+cmd = ["omp"]
 allow_args = true
 ```
 

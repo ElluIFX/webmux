@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -144,13 +145,14 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Cwd    string   `json:"cwd"`
 		Preset string   `json:"preset"`
+		Cmd    []string `json:"cmd"`
 		Args   []string `json:"args"`
 		Name   string   `json:"name"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	item, err := s.Manager.Create(req.Cwd, req.Preset, req.Args, req.Name)
+	item, err := s.Manager.Create(req.Cwd, req.Preset, req.Cmd, req.Args, req.Name)
 	if err != nil {
 		failure(w, 400, err)
 		return
@@ -213,18 +215,30 @@ func (s *Server) dirs(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, err)
 		return
 	}
-	out := make([]string, 0, 20)
+	sort.Slice(entries, func(i, j int) bool {
+		left, right := entries[i].Name(), entries[j].Name()
+		leftHidden, rightHidden := strings.HasPrefix(left, "."), strings.HasPrefix(right, ".")
+		if leftHidden != rightHidden {
+			return !leftHidden
+		}
+		return left < right
+	})
+	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), base) {
 			continue
 		}
 		full := filepath.Join(dir, entry.Name())
-		stat, err := os.Stat(full)
-		if err == nil && stat.IsDir() {
-			out = append(out, full)
-			if len(out) == 20 {
-				break
+		isDir := entry.IsDir()
+		if entry.Type()&os.ModeSymlink != 0 {
+			stat, err := os.Stat(full)
+			if err != nil {
+				continue
 			}
+			isDir = stat.IsDir()
+		}
+		if isDir {
+			out = append(out, full)
 		}
 	}
 	reply(w, 200, out)

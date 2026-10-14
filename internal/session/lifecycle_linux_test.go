@@ -22,7 +22,7 @@ func TestLeaderExitWithInheritedPTY(t *testing.T) {
 		defer cancel()
 		m.Shutdown(ctx)
 	}()
-	s, err := m.Create("", "child", nil, "")
+	s, err := m.Create("", "child", nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestCloseReapsSeparateJobGroups(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
 	defer cancel()
 	defer m.Shutdown(ctx)
-	s, err := m.Create("", "job", nil, "")
+	s, err := m.Create("", "job", nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestCancelledPTYWriteDoesNotHoldInputGate(t *testing.T) {
 		defer cancel()
 		m.Shutdown(ctx)
 	}()
-	s, err := m.Create("", "blocked", nil, "")
+	s, err := m.Create("", "blocked", nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestAdoptedZombieReapedWhileLeaderLives(t *testing.T) {
 		defer cancel()
 		m.Shutdown(ctx)
 	}()
-	s, err := m.Create("", "daemon", nil, "")
+	s, err := m.Create("", "daemon", nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -88,7 +88,7 @@ func ExpandPath(path string) (string, error) {
 	}
 	return filepath.Abs(path)
 }
-func (m *Manager) Create(cwd, preset string, args []string, name string) (*Session, error) {
+func (m *Manager) Create(cwd, preset string, cmd, args []string, name string) (*Session, error) {
 	if m.initErr != nil {
 		return nil, fmt.Errorf("process reaper: %w", m.initErr)
 	}
@@ -107,17 +107,32 @@ func (m *Manager) Create(cwd, preset string, args []string, name string) (*Sessi
 		return nil, errors.New("path is not a directory")
 	}
 	var argv []string
-	for _, p := range m.options.Presets {
-		if p.Name == preset {
-			if len(args) > 0 && !p.AllowArgs {
-				return nil, errors.New("preset does not allow arguments")
-			}
-			argv = append(append([]string(nil), p.Cmd...), args...)
-			break
+	if preset == "custom" {
+		if len(cmd) == 0 || cmd[0] == "" {
+			return nil, errors.New("custom command requires an executable")
 		}
-	}
-	if len(argv) == 0 {
-		return nil, errors.New("unknown or empty preset")
+		if len(args) > 0 {
+			return nil, errors.New("custom command does not accept preset arguments")
+		}
+		argv = cmd
+	} else {
+		if cmd != nil {
+			return nil, errors.New("command is only allowed with the custom preset")
+		}
+		for _, p := range m.options.Presets {
+			if p.Name == preset {
+				if len(args) > 0 && !p.AllowArgs {
+					return nil, errors.New("preset does not allow arguments")
+				}
+				argv = make([]string, len(p.Cmd)+len(args))
+				copy(argv, p.Cmd)
+				copy(argv[len(p.Cmd):], args)
+				break
+			}
+		}
+		if len(argv) == 0 || argv[0] == "" {
+			return nil, errors.New("unknown or empty preset")
+		}
 	}
 	var raw [5]byte
 	if _, err = rand.Read(raw[:]); err != nil {

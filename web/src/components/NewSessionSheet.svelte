@@ -10,20 +10,14 @@
     store,
     stored,
   } from "../api";
-  import {
-    DirectoriesSchema,
-    NoContentSchema,
-    SessionInfoSchema,
-    type Preset,
-  } from "../schemas";
+  import { NoContentSchema, SessionInfoSchema, type Preset } from "../schemas";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Drawer from "$lib/components/ui/drawer";
   import * as AlertDialog from "$lib/components/ui/alert-dialog";
-  import * as Popover from "$lib/components/ui/popover";
-  import * as Command from "$lib/components/ui/command";
+  import DirectoryPicker from "./DirectoryPicker.svelte";
 
   let {
     presets,
@@ -37,49 +31,34 @@
   let preset = $state(
     untrack(
       () =>
-        presets.find((p) => p.name === stored("lastPreset"))?.name ||
+        (stored("lastPreset") === "custom"
+          ? "custom"
+          : presets.find((p) => p.name === stored("lastPreset"))?.name) ||
         presets[0]?.name ||
         "shell",
     ),
   );
   let args = $state("");
+  let command = $state(stored("customCommand"));
   let name = $state("");
-  let dirs = $state<string[]>([]);
-  let directoryOpen = $state(false);
   let mkdirOpen = $state(false);
   let error = $state("");
   let busy = $state(false);
   const chosen = $derived(presets.find((p) => p.name === preset));
-
-  $effect(() => {
-    const prefix = cwd;
-    let active = true;
-    const timer = setTimeout(() => {
-      void api(
-        "/fs/dirs?prefix=" + encodeURIComponent(prefix),
-        DirectoriesSchema,
-      )
-        .then((value) => {
-          if (active) dirs = value;
-        })
-        .catch(() => {
-          if (active) dirs = [];
-        });
-    }, 200);
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  });
+  const custom = $derived(preset === "custom");
 
   async function create(makeDirectory = false) {
     busy = true;
     error = "";
     try {
+      const cmd = custom ? parseArgs(command) : undefined;
+      if (custom && (!cmd?.length || !cmd[0]))
+        throw new Error("请输入可执行程序及参数");
       const payload = {
         cwd,
         preset,
-        args: chosen?.allowArgs ? parseArgs(args) : [],
+        args: !custom && chosen?.allowArgs ? parseArgs(args) : [],
+        ...(custom ? { cmd } : {}),
         name,
       };
       if (makeDirectory)
@@ -100,6 +79,7 @@
         ),
       );
       store("lastPreset", preset);
+      if (custom) store("customCommand", command);
       navigate("/s/" + session.id);
     } catch (err) {
       if (
@@ -138,40 +118,7 @@
           autocorrect="off"
           spellcheck={false}
         />
-        <Popover.Root bind:open={directoryOpen}>
-          <Popover.Trigger>
-            {#snippet child({ props })}<Button
-                {...props}
-                variant="outline"
-                aria-label="浏览目录">浏览</Button
-              >{/snippet}
-          </Popover.Trigger>
-          <Popover.Content class="w-[min(85vw,400px)] p-0" align="end">
-            <Command.Root shouldFilter={false}>
-              <Command.Input
-                bind:value={cwd}
-                placeholder="输入目录前缀…"
-                aria-label="目录补全前缀"
-              />
-              <Command.List class="max-h-48">
-                <Command.Empty>没有匹配目录，可以直接创建。</Command.Empty>
-                {#each dirs as dir (dir)}
-                  <Command.Item
-                    value={dir}
-                    onSelect={() => {
-                      cwd = dir + (dir.endsWith("/") ? "" : "/");
-                      directoryOpen = false;
-                    }}
-                  >
-                    <span class="truncate font-mono text-xs" title={dir}
-                      >{dir}</span
-                    >
-                  </Command.Item>
-                {/each}
-              </Command.List>
-            </Command.Root>
-          </Popover.Content>
-        </Popover.Root>
+        <DirectoryPicker bind:value={cwd} />
       </div>
       {#if recent.length}
         <div class="flex flex-wrap gap-1" aria-label="最近目录">
@@ -202,10 +149,39 @@
             }}>{p.label}</Button
           >
         {/each}
+        <Button
+          type="button"
+          variant={custom ? "default" : "outline"}
+          aria-pressed={custom}
+          onclick={() => {
+            preset = "custom";
+            args = "";
+          }}>自定义</Button
+        >
       </div>
-      <p class="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
-        {chosen?.cmd.join(" ")}{args ? " " + args : ""}
-      </p>
+      {#if custom}
+        <div class="space-y-2">
+          <Label for="custom-command">自定义启动命令</Label>
+          <Input
+            id="custom-command"
+            bind:value={command}
+            placeholder="omp --resume 或 bash -lc 'npm run dev'"
+            required
+            autocomplete="off"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck={false}
+          />
+          <p class="text-xs text-muted-foreground">
+            支持引号和转义；直接执行程序，不展开 shell 变量或管道。需要 shell
+            语法时请使用 bash -lc '命令'。
+          </p>
+        </div>
+      {:else}
+        <p class="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+          {chosen?.cmd.join(" ")}{args ? " " + args : ""}
+        </p>
+      {/if}
     </fieldset>
     {#if chosen?.allowArgs}
       <div class="space-y-2">
@@ -233,7 +209,7 @@
       <Button type="button" variant="outline" disabled={busy} onclick={onclose}
         >取消</Button
       >
-      <Button type="submit" disabled={busy || !chosen}
+      <Button type="submit" disabled={busy || (!chosen && !custom)}
         >{busy ? "正在启动…" : "创建并进入 →"}</Button
       >
     </div>

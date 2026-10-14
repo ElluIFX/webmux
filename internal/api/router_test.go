@@ -3,12 +3,17 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/coder/websocket"
 	"github.com/rainchan/webmux/internal/config"
 	"github.com/rainchan/webmux/internal/session"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -140,5 +145,194 @@ func TestProtocolAndSecurity(t *testing.T) {
 	_ = res.Body.Close()
 	if res.StatusCode != 204 {
 		t.Fatal(res.Status)
+	}
+}
+
+func TestDirectoryPickerListsAllDirectories(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	names := []string{"webmux", "zz directory"}
+	for i := range 25 {
+		names = append(names, fmt.Sprintf(".cache-%02d", i))
+	}
+	for _, name := range names {
+		if err := os.Mkdir(filepath.Join(root, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "a-linked")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "ordinary-file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"file-link": file, "broken-link": filepath.Join(root, "missing")} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	allNames := append([]string{"a-linked"}, names...)
+	wantAll := make([]string, 0, len(allNames))
+	for _, name := range allNames {
+		wantAll = append(wantAll, filepath.Join(root, name))
+	}
+	server := &Server{Config: config.Config{DefaultCwd: root}}
+	for _, row := range []struct {
+		name, prefix string
+		want         []string
+	}{
+		{"default", "", wantAll},
+		{"trailing slash", root + "/", wantAll},
+		{"home", "~", wantAll},
+		{"home slash", "~/", wantAll},
+		{"partial name", root + "/web", []string{filepath.Join(root, "webmux")}},
+		{"home partial name", "~/web", []string{filepath.Join(root, "webmux")}},
+		{"hidden prefix", root + "/.cache-2", wantAll[len(wantAll)-5:]},
+		{"no match", root + "/absent", []string{}},
+		{"symlink navigation", root + "/a-linked/", []string{}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			server.dirs(recorder, httptest.NewRequest("GET", "/api/fs/dirs?prefix="+url.QueryEscape(row.prefix), nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+			}
+			var got []string
+			if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, row.want) {
+				t.Fatalf("directories = %v, want %v", got, row.want)
+			}
+		})
+	}
+	for _, prefix := range []string{root + "/missing/", file + "/"} {
+		recorder := httptest.NewRecorder()
+		server.dirs(recorder, httptest.NewRequest("GET", "/api/fs/dirs?prefix="+url.QueryEscape(prefix), nil))
+		var body map[string]string
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.Code != http.StatusBadRequest || body["error"] == "" {
+			t.Fatalf("directory error: status %d, body %v", recorder.Code, body)
+		}
+	}
+}
+
+func TestCustomCommandExecutesLiteralArgvInSelectedDirectory(t *testing.T) {
+	cwd := t.TempDir()
+	script := "#!/bin/sh\nprintf 'cwd=%s\\n' \"$PWD\"\nprintf '<%s>\\n' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(cwd, "report"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	m := session.NewManager(session.Options{DefaultCwd: t.TempDir()})
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+		defer cancel()
+		m.Shutdown(ctx)
+	}()
+	cmd := []string{"./report", "two words", `"quoted value"`, "$HOME", "*", "$(touch sentinel)", "; exit 9"}
+	body, err := json.Marshal(map[string]any{"cwd": cwd, "preset": "custom", "cmd": cmd, "args": []string{}, "name": "My command"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	New(config.Config{}, m).ServeHTTP(recorder, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(string(body))))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var info session.Info
+	if err := json.Unmarshal(recorder.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Preset != "custom" || info.Cwd != cwd || info.Title != "My command" || !reflect.DeepEqual(info.Cmd, cmd) {
+		t.Fatalf("custom session info: %+v", info)
+	}
+	item, err := m.Get(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := item.Attach()
+	defer item.Detach(sub)
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case frame := <-sub.Out:
+			if frame[0] != 3 {
+				continue
+			}
+			info = item.Info()
+			if info.ExitCode == nil || *info.ExitCode != 0 {
+				t.Fatalf("custom command exit: %+v", info)
+			}
+			want := "cwd=" + cwd + "\r\n"
+			for _, arg := range cmd[1:] {
+				want += "<" + arg + ">\r\n"
+			}
+			if got := string(item.Buffer()); got != want {
+				t.Fatalf("PTY output = %q, want %q", got, want)
+			}
+			if _, err := os.Stat(filepath.Join(cwd, "sentinel")); !os.IsNotExist(err) {
+				t.Fatalf("shell expansion created sentinel: %v", err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("custom PTY failed to exit")
+		}
+	}
+}
+
+func TestSessionCreationRejectsCommandConflicts(t *testing.T) {
+	presets := []session.Preset{
+		{Name: "fixed", Cmd: []string{"/bin/echo", "fixed"}},
+		{Name: "with-args", Cmd: []string{"/bin/echo", "preset"}, AllowArgs: true},
+	}
+	m := session.NewManager(session.Options{DefaultCwd: t.TempDir(), Presets: presets})
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+		defer cancel()
+		m.Shutdown(ctx)
+	}()
+	handler := New(config.Config{Presets: presets}, m)
+	for _, body := range []string{
+		`{"preset":"custom"}`,
+		`{"preset":"custom","cmd":[]}`,
+		`{"preset":"custom","cmd":[""]}`,
+		`{"preset":"custom","cmd":["/bin/echo"],"args":["extra"]}`,
+		`{"preset":"fixed","cmd":["/bin/echo"]}`,
+		`{"preset":"with-args","cmd":["/bin/echo"],"args":["extra"]}`,
+		`{"preset":"fixed","cmd":[]}`,
+		`{"cmd":["/bin/echo"]}`,
+		`{"preset":"fixed","args":["extra"]}`,
+		`{"preset":"missing"}`,
+		`{"preset":"custom","cmd":["/definitely/missing/webmux-executable"]}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body)))
+			var response map[string]string
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != http.StatusBadRequest || response["error"] == "" {
+				t.Fatalf("status %d, body %v", recorder.Code, response)
+			}
+		})
+	}
+	if got := m.List(); len(got) != 0 {
+		t.Fatalf("invalid requests created sessions: %v", got)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(`{"preset":"with-args","args":["two words","$HOME"]}`)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("preset with allowed arguments: status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var info session.Info
+	if err := json.Unmarshal(recorder.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Preset != "with-args" || !reflect.DeepEqual(info.Cmd, []string{"/bin/echo", "preset", "two words", "$HOME"}) {
+		t.Fatalf("preset arguments: %+v", info)
 	}
 }

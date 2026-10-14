@@ -45,19 +45,19 @@ chmod 600 ~/.config/webmux/config.toml
 curl -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:7681/api/health
 ```
 
-| 配置                 | 默认                    | 含义                                                 |
-| -------------------- | ----------------------- | ---------------------------------------------------- |
-| `listen`             | `127.0.0.1:7681`        | HTTP / WebSocket 监听地址                            |
-| `token`              | 空                      | 可选共享 token，空表示无认证                         |
-| `scrollback_bytes`   | `2097152`               | 每会话保留最新 2 MiB 原始终端字节，不是精确行数      |
-| `default_cwd`        | `~`                     | 新建会话默认目录，支持 `~` 展开                      |
-| `shell`              | `$SHELL` 或 `/bin/bash` | 默认 shell，以 `-l -i` 启动                          |
-| `idle_after_seconds` | `30`                    | 无等待特征时的空闲阈值                               |
-| `prompt_patterns`    | 常见提示符 / 权限确认   | 可自定义的 Go 正则表达式列表                         |
-| `allowed_origins`    | `[]`                    | 附加允许的完整 Origin，例如 `https://myhost.example` |
-| `presets`            | shell / claude / codex  | argv 数组及 `allow_args`，配置列表替换默认列表       |
+| 配置                 | 默认                         | 含义                                                                |
+| -------------------- | ---------------------------- | ------------------------------------------------------------------- |
+| `listen`             | `127.0.0.1:7681`             | HTTP / WebSocket 监听地址                                           |
+| `token`              | 空                           | 可选共享 token，空表示无认证                                        |
+| `scrollback_bytes`   | `2097152`                    | 每会话保留最新 2 MiB 原始终端字节，不是精确行数                     |
+| `default_cwd`        | `~`                          | 新建会话默认目录，支持 `~` 展开                                     |
+| `shell`              | `$SHELL` 或 `/bin/bash`      | 默认 shell，以 `-l -i` 启动                                         |
+| `idle_after_seconds` | `30`                         | 无等待特征时的空闲阈值                                              |
+| `prompt_patterns`    | 常见提示符 / 权限确认        | 可自定义的 Go 正则表达式列表                                        |
+| `allowed_origins`    | `[]`                         | 附加允许的完整 Origin，例如 `https://myhost.example`                |
+| `presets`            | shell / claude / codex / omp | argv 数组及 `allow_args`，配置列表替换默认列表；`custom` 为保留名称 |
 
-预设不会自动安装 agent；`which claude`、`which codex` 必须能找到实际程序。追加参数按引号与反斜杠规则拆成 argv，不经 shell 求值。要更改 shell 的启动方式，可为 shell 预设显式设置 `cmd = ["/bin/zsh", "-l", "-i"]`。
+预设不会自动安装 agent；`which claude`、`which codex`、`which omp` 必须能找到实际程序。追加参数按引号与反斜杠规则拆成 argv，不经 shell 求值。要更改 shell 的启动方式，可为 shell 预设显式设置 `cmd = ["/bin/zsh", "-l", "-i"]`。
 
 ## systemd 用户服务
 
@@ -98,7 +98,11 @@ WebMux 不内置 TLS。需要安全上下文与系统剪贴板 API 时，可用 
 
 ## 使用
 
-欢迎页按最近活跃时间显示会话、完整目录（视觉上中间省略）、命令、状态、预览与连接数。列表通过 WebSocket 实时更新，不轮询。新建支持目录补全、确认后创建目录、最近 5 个目录快捷选项（本地最多保存 10 个）、预设追加参数和可选固定名称。
+欢迎页按最近活跃时间显示会话、完整目录（视觉上中间省略）、命令、状态、预览与连接数。列表通过 WebSocket 实时更新，不轮询。新建支持目录选择、确认后创建目录、最近 5 个目录快捷选项（本地最多保存 10 个）、预设追加参数、自定义启动命令和可选固定名称。
+
+- 目录选择器采用路径导航：输入完整路径或目录前缀，↑↓ 选择、Enter / Tab 进入子目录、Alt+↑ 返回上一级；也可返回主目录。点击“选择当前目录”后才更新工作目录。
+- 目录列表不截断，普通目录优先，支持符号链接目录；默认不显示点目录，可用“显示隐藏目录”切换，也可直接输入点目录前缀。
+- 启动预设包括 Shell、Claude Code、Codex CLI、omp。自定义命令支持引号和反斜杠，记住上次输入；直接执行 argv，不展开变量、通配符或管道。需要 shell 语法时显式输入 `bash -lc 'npm run dev | tee dev.log'`。
 
 - 点击卡片进入终端；右上角菜单选择关闭或移除，shadcn AlertDialog 二次确认。
 - 终端菜单提供复制全部原始缓冲、清屏、重新同步、字体大小和关闭会话。
@@ -128,6 +132,8 @@ OSC 0/2 title 支持 BEL / ST 与跨块拼接，创建时的手动名称优先�
 ## 协议与实现
 
 REST 与二进制 WebSocket 帧遵循设计文档第 6 节。补充只读 `GET /api/config` 返回 `{defaultCwd}`，不暴露 token。HTTP 接受 Bearer 或 `webmux_token` Cookie；WebSocket 也可用 query token。静态登录页面公开，所有 API / WebSocket 受认证保护。token 以定长摘要常量时间比较；浏览器 API / WebSocket 均校验同源或允许的 Origin。
+
+创建会话支持两种互斥形式：预设 `{cwd, preset, args?: string[], name?}`，或自定义 `{cwd, preset: "custom", cmd: string[], name?}`。自定义命令必须包含非空可执行程序，不能同时传非空 `args`；预设形式不能传 `cmd`。`GET /api/fs/dirs?prefix=` 返回全部匹配目录，普通目录排在点目录之前，各组按名称排序。
 
 Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照与订阅在同一锁内切换，无回放缺口；慢客户端断开后可重连。PTY 使用 Go netpoll 支持的非阻塞描述符，断开连接能取消阻塞输入，不会关闭持久会话；每连接输入队列有上限，单次写入最长 10 秒。会话退出先清理子进程并排空 PTY，再发送退出帧。关闭先 SIGHUP，5 秒后 SIGKILL；Linux 按会话 ID、进程树与继承的 WEBMUX_SESSION_ID 找到其他 job-control 进程组，并用 subreaper 回收孤儿子进程，不因主进程先退出而取消清理。显式清掉环境再完全脱离会话的自守护程序不属于可靠可控的 PTY 子进程；本服务不是进程沙箱。不会把终端输入输出写入日志。
 

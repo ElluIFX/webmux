@@ -43,6 +43,7 @@ func Load(path string, required bool) (Config, error) {
 			{Name: "shell", Label: "Shell", Cmd: []string{}},
 			{Name: "claude", Label: "Claude Code", Cmd: []string{"claude"}, AllowArgs: true},
 			{Name: "codex", Label: "Codex CLI", Cmd: []string{"codex"}, AllowArgs: true},
+			{Name: "omp", Label: "omp", Cmd: []string{"omp"}, AllowArgs: true},
 		},
 	}
 	if _, err := toml.DecodeFile(path, &c); err != nil {
@@ -75,6 +76,9 @@ func (c *Config) Validate() error {
 		p := &c.Presets[i]
 		if p.Name == "" || seen[p.Name] {
 			return errors.New("preset names must be nonempty and unique")
+		}
+		if p.Name == "custom" {
+			return errors.New("preset name custom is reserved for custom commands")
 		}
 		seen[p.Name] = true
 		if p.Name == "shell" && len(p.Cmd) == 0 {
