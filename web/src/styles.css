@@ -213,9 +213,11 @@
 }
 .soft-row {
   display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
   gap: 0.35rem;
   overflow-x: auto;
-  padding: 0.25rem 0.5rem;
   scrollbar-width: none;
 }
 .soft-row > button {
@@ -223,15 +225,15 @@
   min-height: 36px;
   min-width: 40px;
 }
-.soft-row:last-child {
-  padding-bottom: 0.5rem;
-}
 .soft-keys {
   display: none;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.25rem 0.5rem 0.5rem;
 }
 @media (pointer: coarse) {
   .soft-keys {
-    display: block;
+    display: flex;
   }
 }
 @media (prefers-reduced-motion: no-preference) {
