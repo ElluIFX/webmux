@@ -8,6 +8,7 @@
   import { Button } from "$lib/components/ui/button";
   import * as Popover from "$lib/components/ui/popover";
   import * as Command from "$lib/components/ui/command";
+  import { ScrollArea } from "$lib/components/ui/scroll-area";
 
   let { value = $bindable("") }: { value: string } = $props();
   let open = $state(false);
@@ -91,15 +92,15 @@
     {/snippet}
   </Popover.Trigger>
   <Popover.Content
-    class="w-[min(90vw,520px)] p-0"
+    class="directory-picker w-[min(90vw,520px)] gap-0 overflow-hidden p-0"
     align="end"
     onOpenAutoFocus={(event) => {
       event.preventDefault();
       input?.focus();
     }}
   >
-    <Command.Root shouldFilter={false} bind:value={selected}>
-      <div class="flex items-center gap-1 border-b px-2 py-2">
+    <Command.Root class="contents" shouldFilter={false} bind:value={selected}>
+      <div class="flex shrink-0 items-center gap-1 border-b px-2 py-2">
         <Button
           type="button"
           variant="ghost"
@@ -147,29 +148,35 @@
           }
         }}
       />
-      <Command.List class="max-h-[min(45dvh,320px)]">
-        <Command.Empty>
-          {loading
-            ? "正在读取目录…"
-            : error
-              ? "无法读取目录"
-              : "没有匹配的子目录"}
-        </Command.Empty>
-        {#each visible as dir (dir)}
-          <Command.Item value={dir} onSelect={() => enter(dir)}>
-            <RiFolderLine class="size-4 text-muted-foreground" />
-            <span class="min-w-0 flex-1 truncate" title={dir}
-              >{dir.split("/").pop() || "/"}</span
-            >
-            <span class="text-muted-foreground" aria-hidden="true">›</span>
-          </Command.Item>
-        {/each}
-      </Command.List>
+      <ScrollArea
+        type="always"
+        class="directory-scroll mx-2 mb-2 min-h-0 flex-1 overflow-hidden"
+        scrollbarYClasses="bg-muted/50 [&_[data-slot=scroll-area-thumb]]:bg-muted-foreground"
+      >
+        <Command.List class="max-h-none overflow-visible pr-3">
+          <Command.Empty>
+            {loading
+              ? "正在读取目录…"
+              : error
+                ? "无法读取目录"
+                : "没有匹配的子目录"}
+          </Command.Empty>
+          {#each visible as dir (dir)}
+            <Command.Item value={dir} onSelect={() => enter(dir)}>
+              <RiFolderLine class="size-4 text-muted-foreground" />
+              <span class="min-w-0 flex-1 truncate" title={dir}
+                >{dir.split("/").pop() || "/"}</span
+              >
+              <span class="text-muted-foreground" aria-hidden="true">›</span>
+            </Command.Item>
+          {/each}
+        </Command.List>
+      </ScrollArea>
     </Command.Root>
     {#if error}<p role="alert" class="px-3 py-2 text-xs text-destructive">
         {error}
       </p>{/if}
-    <div class="flex items-center justify-between gap-2 border-t p-2">
+    <div class="flex shrink-0 items-center justify-between gap-2 border-t p-2">
       <span class="text-xs text-muted-foreground"
         >↑↓ 选择 · Enter / Tab 进入</span
       >
@@ -182,3 +189,25 @@
     </div>
   </Popover.Content>
 </Popover.Root>
+
+<style>
+  :global(.directory-picker) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    max-height: min(
+      calc(100dvh - 16px),
+      var(--bits-popover-content-available-height, calc(100dvh - 16px))
+    );
+  }
+
+  :global(.directory-picker [data-slot="command-input-wrapper"]) {
+    margin: 0.5rem;
+    padding: 0;
+    flex-shrink: 0;
+  }
+
+  :global(.directory-scroll [data-slot="scroll-area-viewport"]) {
+    max-height: min(45dvh, 320px);
+  }
+</style>

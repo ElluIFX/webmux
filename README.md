@@ -22,7 +22,7 @@ make build
 - `make build`：构建内嵌静态资源的单二进制 `bin/webmux`。
 - `make release VERSION=0.1.0`：生成 `bin/webmux-linux-amd64`、`bin/webmux-linux-arm64`，CGO 禁用。
 - `make install`：构建并安装到 `~/.local/bin/webmux`。
-- `make test`：Go race 测试与前端控制键行为测试。
+- `make test`：Go race 测试、前端控制键行为测试与 Chromium 目录选择器组件测试。
 - `make check`：Svelte / TypeScript 检查、Vite 构建、格式检查、`go vet`、golangci-lint 默认规则。需先将 `golangci-lint` 放到 PATH。
 - `make format`：gofmt 格式化所有 Go 文件，Prettier 格式化前端代码、配置与文档。
 - `make format-check`：检查格式，不修改文件；构建产物和依赖目录除外。
@@ -101,7 +101,7 @@ WebMux 不内置 TLS。需要安全上下文与系统剪贴板 API 时，可用 
 欢迎页按最近活跃时间显示会话、完整目录（视觉上中间省略）、命令、状态、预览与连接数。列表通过 WebSocket 实时更新，不轮询。新建支持目录选择、确认后创建目录、最近 5 个目录快捷选项（本地最多保存 10 个）、预设追加参数、自定义启动命令和可选固定名称。
 
 - 目录选择器采用路径导航：输入完整路径或目录前缀，↑↓ 选择、Enter / Tab 进入子目录、Alt+↑ 返回上一级；也可返回主目录。点击“选择当前目录”后才更新工作目录。
-- 目录列表不截断，普通目录优先，支持符号链接目录；默认不显示点目录，可用“显示隐藏目录”切换，也可直接输入点目录前缀。
+- 目录列表不截断，普通目录优先，支持符号链接目录；默认不显示点目录，可用“显示隐藏目录”切换，也可直接输入点目录前缀。长列表使用固定可见、可拖动的滚动条；只滚动目录区域，路径输入和确认按钮保持可见。
 - 启动预设包括 Shell、Claude Code、Codex CLI、omp。自定义命令支持引号和反斜杠，记住上次输入；直接执行 argv，不展开变量、通配符或管道。需要 shell 语法时显式输入 `bash -lc 'npm run dev | tee dev.log'`。
 
 - 点击卡片进入终端；右上角菜单选择关闭或移除，shadcn AlertDialog 二次确认。
@@ -152,9 +152,12 @@ pnpm --dir web install --frozen-lockfile
 pnpm --dir web dev
 go test -race ./...
 pnpm --dir web test
+pnpm --dir web test:browser # 只运行目录选择器组件回归测试
 make format
 make check
 ```
+
+组件测试使用 Vitest Browser、Playwright Chromium 与真实 Svelte / Tailwind 样式，不依赖正在运行的后端。首次运行前执行 `pnpm --dir web exec playwright install chromium`；Linux 若缺少浏览器系统库，可按 Playwright 提示安装。测试覆盖长目录列表滚动与拖动条可见性、输入/列表/确认区间距、小屏布局、键盘导航、显式确认、隐藏目录、错误恢复和过期请求响应。
 
 Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被拒绝。生产不需要开发 Origin。
 

@@ -366,7 +366,7 @@ interface Preset {
 - 会话列表保存在 Svelte `$state` 数组中，事件经 Zod discriminated union 校验后按 id 更新
 - 卡片组件 `SessionCard`：标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、目录、预设名、相对时间（每 30 秒刷新一次）、`lastLine` 单行等宽字体预览
 - 空状态：没有会话时显示“还没有会话”和一个大按钮“新建会话”
-- `NewSessionSheet`：移动端使用 shadcn Drawer，桌面端使用 Dialog；字段见产品设计 3.2。`DirectoryPicker` 使用 Popover + Command，仅打开时按路径输入 `debounce 150ms` 请求 `/api/fs/dirs`，支持键盘导航、确认当前目录、隐藏目录切换、加载与错误状态；浏览中的路径与表单工作目录分离。最近目录存 localStorage `webmux.recentDirs`（最多 10 个），自定义命令存 `webmux.customCommand`。
+- `NewSessionSheet`：移动端使用 shadcn Drawer，桌面端使用 Dialog；字段见产品设计 3.2。`DirectoryPicker` 使用 Popover + Command + ScrollArea，仅打开时按路径输入 `debounce 150ms` 请求 `/api/fs/dirs`，支持键盘导航、确认当前目录、隐藏目录切换、加载与错误状态；浏览中的路径与表单工作目录分离。输入、列表与确认区保持间距，目录区域限制最大高度并使用固定可见、可拖动的滚动条，路径和确认区不随目录列表滚动。最近目录存 localStorage `webmux.recentDirs`（最多 10 个），自定义命令存 `webmux.customCommand`。
 - WebSocket 断开时顶部显示黄色细条“连接已断开，重连中…”，自动重连
 
 ### 7.3 TerminalPage
@@ -422,7 +422,7 @@ try {
 
 - 跟随 `prefers-color-scheme`，深色为默认优化目标（手机夜间使用）
 - xterm 主题取 GitHub Dark / Light 两套色板，与页面 CSS 变量同源
-- 复用官方 shadcn-svelte Button、Card、Input、Dialog、Drawer、AlertDialog、DropdownMenu、Popover、Command、Slider 等组件，不重新实现基础控件。自定义 CSS 只负责主题、终端布局和触摸行为。
+- 复用官方 shadcn-svelte Button、Card、Input、Dialog、Drawer、AlertDialog、DropdownMenu、Popover、Command、ScrollArea、Slider 等组件，不重新实现基础控件。自定义 CSS 只负责主题、终端布局和触摸行为。
 
 ### 7.6 前端状态与存储
 

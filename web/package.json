@@ -10,7 +10,9 @@
     "format": "prettier --write --ignore-path ../.prettierignore .",
     "format:check": "prettier --check --ignore-path ../.prettierignore .",
     "dev": "vite --host 127.0.0.1",
-    "test": "node --test test/*.test.mjs"
+    "test": "pnpm run test:node && pnpm run test:browser",
+    "test:node": "node --test test/*.test.mjs",
+    "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -23,8 +25,10 @@
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.5",
+    "@vitest/browser-playwright": "^5.0.4",
     "bits-ui": "^2.19.5",
     "cn": "^0.4.0",
+    "playwright": "^1.64.0",
     "prettier": "^3.9.10",
     "prettier-plugin-svelte": "^4.1.1",
     "remixicon-svelte": "^0.0.5",
@@ -35,6 +39,8 @@
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.3",
     "vaul-svelte": "1.0.0-next.7",
-    "vite": "^7.1.9"
+    "vite": "^7.1.9",
+    "vitest": "^5.0.4",
+    "vitest-browser-svelte": "^3.1.0"
   }
 }
