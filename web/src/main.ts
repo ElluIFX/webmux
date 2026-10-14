@@ -1,10 +1,7 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
+import { initializeTheme } from "./theme";
 import "./styles.css";
 
-const theme = matchMedia("(prefers-color-scheme: light)");
-const applyTheme = () =>
-  document.documentElement.classList.toggle("dark", !theme.matches);
-applyTheme();
-theme.addEventListener("change", applyTheme);
+initializeTheme();
 mount(App, { target: document.getElementById("app")! });

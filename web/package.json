@@ -10,9 +10,11 @@
     "format": "prettier --write --ignore-path ../.prettierignore .",
     "format:check": "prettier --check --ignore-path ../.prettierignore .",
     "dev": "vite --host 127.0.0.1",
-    "test": "pnpm run test:node && pnpm run test:browser",
-    "test:node": "node --test test/*.test.mjs",
-    "test:browser": "vitest run --config vitest.browser.config.ts"
+    "test": "pnpm run test:unit && pnpm run test:browser && pnpm run test:e2e",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "test:e2e:report": "playwright show-report playwright-report"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -22,6 +24,7 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.5",

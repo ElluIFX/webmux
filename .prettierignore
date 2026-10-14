@@ -2,5 +2,7 @@ bin/
 web/node_modules/
 web/dist/
 web/.vitest/
+web/test-results/
+web/playwright-report/
 web/pnpm-lock.yaml
 acceptance.local/

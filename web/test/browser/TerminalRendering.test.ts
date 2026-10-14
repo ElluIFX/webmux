@@ -9,6 +9,7 @@ declare module "vitest/internal/browser" {
     nativeTouchGesture(
       points: { x: number; y: number }[],
       finish?: "end" | "cancel",
+      holdMilliseconds?: number,
     ): Promise<void>;
   }
 }
@@ -74,6 +75,7 @@ const nativeResizeObserver = window.ResizeObserver;
 const nativeMatchMedia = window.matchMedia.bind(window);
 let previousFont: string | null;
 let touchTeardowns: (() => void)[];
+let previousDark: boolean;
 
 // Chromium's device emulator can change DPR without changing the actual
 // physical-pixel observations. Only that browser API boundary is controlled;
@@ -455,6 +457,7 @@ function syntheticPointerCapture(target: HTMLElement) {
 
 beforeEach(async () => {
   sockets = [];
+  previousDark = document.documentElement.classList.contains("dark");
   previousFont = localStorage.getItem("webmux.fontSize");
   localStorage.setItem("webmux.fontSize", "14");
   touchTeardowns = [];
@@ -511,6 +514,7 @@ afterEach(async () => {
     );
   } finally {
     for (const teardown of touchTeardowns) teardown();
+    document.documentElement.classList.toggle("dark", previousDark);
     if (previousFont === null) localStorage.removeItem("webmux.fontSize");
     else localStorage.setItem("webmux.fontSize", previousFont);
     for (const observer of observations) observer.native.disconnect();
@@ -870,4 +874,87 @@ test("pinch resizes real cells and rebases one-finger scrolling, while cancel an
   expect(socket.sent).toHaveLength(sent);
   expect(socket.closeCount).toBe(1);
   expect(focused).toHaveBeenCalledTimes(1);
+});
+
+test("explicit black ANSI input remains readable in dark theme and updates on theme changes", async () => {
+  observeGlyphPixels(true);
+  document.documentElement.classList.add("dark");
+  const { socket } = await openTerminal();
+  socket.receive(1, "\x1b[38;2;0;0;0m中文 input\x1b[0m");
+  await expectDomText("中文 input");
+  const ratio = () => {
+    const span = [
+      ...host().querySelectorAll<HTMLElement>(".xterm-rows span"),
+    ].find((element) => element.textContent?.includes("input"))!;
+    const luminance = (color: string) => {
+      const rgb = color
+        .match(/\d+/g)!
+        .slice(0, 3)
+        .map((value) => {
+          const channel = Number(value) / 255;
+          return channel <= 0.04045
+            ? channel / 12.92
+            : ((channel + 0.055) / 1.055) ** 2.4;
+        });
+      return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+    };
+    const foreground = luminance(getComputedStyle(span).color);
+    const background = luminance(
+      getComputedStyle(host().querySelector(".xterm")!).backgroundColor,
+    );
+    return (
+      (Math.max(foreground, background) + 0.05) /
+      (Math.min(foreground, background) + 0.05)
+    );
+  };
+  await expect.poll(ratio).toBeGreaterThanOrEqual(4.49);
+  document.documentElement.classList.remove("dark");
+  await expect.poll(ratio).toBeGreaterThanOrEqual(4.49);
+  document.documentElement.classList.add("dark");
+  await expect.poll(ratio).toBeGreaterThanOrEqual(4.49);
+});
+
+test("native long press selects wide text and dragging copies multiple lines without terminal input or keyboard", async () => {
+  observeGlyphPixels(true);
+  const { socket } = await openTerminal();
+  socket.receive(1, "prefix 中文 tail\r\nsecond line");
+  await expectDomText("second line");
+  const { textarea, focused } = blurAndTrackFocus();
+  // Column 9 is the trailing half of 中, not a separate blank cell.
+  const start = gestureStart(socket, 9, 1);
+  await commands.nativeTouchGesture([start], "end", 650);
+  await expect
+    .element(page.getByRole("status", { name: "Terminal selection" }))
+    .toHaveTextContent("中文");
+  await page.getByRole("button", { name: "Copy selection" }).click();
+  await expect
+    .element(page.getByRole("status", { name: "Copied terminal text" }))
+    .toHaveTextContent("中文");
+  await commands.nativeTouchGesture(
+    [start, gestureStart(socket, 6, 2)],
+    "end",
+    650,
+  );
+  await expect
+    .poll(
+      () =>
+        document.querySelector('[aria-label="Terminal selection"]')
+          ?.textContent,
+    )
+    .toBe("中文 tail\nsecond");
+  await page.getByRole("button", { name: "Copy selection" }).click();
+  await expect
+    .poll(
+      () =>
+        document.querySelector('[aria-label="Copied terminal text"]')
+          ?.textContent,
+    )
+    .toBe("中文 tail\nsecond");
+  expect(inputText(socket)).toBe("");
+  expect(document.activeElement).not.toBe(textarea);
+  expect(focused).not.toHaveBeenCalled();
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  await expect
+    .element(page.getByRole("status", { name: "Terminal selection" }))
+    .toHaveTextContent("");
 });

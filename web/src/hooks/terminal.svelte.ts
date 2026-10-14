@@ -52,6 +52,7 @@ export function useTerminal(
   );
   let modifiers = $state<Modifiers>({ ctrl: false, alt: false });
   let error = $state("");
+  let selection = $state("");
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -77,6 +78,7 @@ export function useTerminal(
       fontFamily: '"SF Mono", Menlo, Consolas, monospace',
       scrollback: 10000,
       cursorBlink: true,
+      minimumContrastRatio: 4.5,
       allowProposedApi: true,
       macOptionIsMeta: true,
       theme: terminalTheme(),
@@ -104,11 +106,14 @@ export function useTerminal(
       useDomRenderer();
       // xterm's built-in DOM renderer remains available without WebGL.
     }
-    const colors = matchMedia("(prefers-color-scheme: light)");
     const theme = () => {
       term.options.theme = terminalTheme();
     };
-    colors.addEventListener("change", theme);
+    const colors = new MutationObserver(theme);
+    colors.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
     term.textarea?.setAttribute("autocapitalize", "off");
     term.textarea?.setAttribute("autocorrect", "off");
     term.textarea?.setAttribute("spellcheck", "false");
@@ -168,6 +173,9 @@ export function useTerminal(
     );
     socket = ws;
     const input = term.onData(send);
+    const selected = term.onSelectionChange(() => {
+      selection = term.getSelection();
+    });
     const resize = term.onResize((size) =>
       ws.send(1, encoder.encode(JSON.stringify(size))),
     );
@@ -249,6 +257,76 @@ export function useTerminal(
     let moved = false;
     let pinchDistance = 0;
     let pinchFont = fontSize;
+    let longPress: number | undefined;
+    let selecting = false;
+    let selectionAnchor: { start: number; end: number } | undefined;
+    const cancelLongPress = () => {
+      clearTimeout(longPress);
+      longPress = undefined;
+    };
+    const cellAt = (point: TouchPoint) => {
+      const bounds = screen.getBoundingClientRect();
+      const column = Math.max(
+        0,
+        Math.min(
+          term.cols - 1,
+          Math.floor(((point.x - bounds.left) / bounds.width) * term.cols),
+        ),
+      );
+      const row =
+        term.buffer.active.viewportY +
+        Math.max(
+          0,
+          Math.min(
+            term.rows - 1,
+            Math.floor(((point.y - bounds.top) / bounds.height) * term.rows),
+          ),
+        );
+      const line = term.buffer.active.getLine(row);
+      // The trailing cell of a wide CJK/emoji glyph belongs to its leading cell.
+      const start =
+        line?.getCell(column)?.getWidth() === 0 ? column - 1 : column;
+      const width = line?.getCell(start)?.getWidth() || 1;
+      return { row, column: start, width, line };
+    };
+    const startSelection = (point: TouchPoint) => {
+      const { row, column, width, line } = cellAt(point);
+      if (!line) return;
+      let start = column;
+      let end = column + width;
+      const isWord = (col: number) =>
+        /[\p{L}\p{N}\p{M}_]/u.test(line.getCell(col)?.getChars() ?? "");
+      if (isWord(column)) {
+        while (start > 0) {
+          const previous =
+            line.getCell(start - 1)?.getWidth() === 0 ? start - 2 : start - 1;
+          if (!isWord(previous)) break;
+          start = previous;
+        }
+        while (end < term.cols && isWord(end))
+          end += line.getCell(end)?.getWidth() || 1;
+      }
+      selectionAnchor = {
+        start: row * term.cols + start,
+        end: row * term.cols + end,
+      };
+      selecting = true;
+      moved = true;
+      term.blur();
+      term.select(start, row, end - start);
+    };
+    const extendSelection = (point: TouchPoint) => {
+      if (!selectionAnchor) return;
+      const { row, column, width } = cellAt(point);
+      const position = row * term.cols + column;
+      const start = Math.min(selectionAnchor.start, position);
+      const end = Math.max(selectionAnchor.end, position + width);
+      term.select(
+        start % term.cols,
+        Math.floor(start / term.cols),
+        end - start,
+      );
+    };
     const distance = () =>
       Math.hypot(
         firstPoint!.x - secondPoint!.x,
@@ -266,6 +344,9 @@ export function useTerminal(
       pinchFont = fontSize;
     };
     const clearPointers = () => {
+      cancelLongPress();
+      selecting = false;
+      selectionAnchor = undefined;
       for (const id of pointers.keys()) {
         pointers.delete(id);
         if (parent.hasPointerCapture(id)) parent.releasePointerCapture(id);
@@ -277,10 +358,26 @@ export function useTerminal(
     };
     const pointerDown = (event: PointerEvent) => {
       if (disposed || event.pointerType !== "touch") return;
+      // Suppress compatibility mousedown events that would refocus xterm after a swipe.
+      event.preventDefault();
       event.stopPropagation();
-      if (!pointers.size) moved = false;
+      if (!pointers.size) {
+        moved = false;
+        term.clearSelection();
+      }
       pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-      if (pointers.size > 1) moved = true;
+      if (pointers.size > 1) {
+        moved = true;
+        cancelLongPress();
+        selecting = false;
+        selectionAnchor = undefined;
+      } else {
+        const point = { x: event.clientX, y: event.clientY };
+        longPress = window.setTimeout(() => {
+          if (!disposed && pointers.size === 1 && longPress !== undefined)
+            startSelection(point);
+        }, 500);
+      }
       // DOM terminal rows are replaced while scrolling or repainting a TUI.
       // Capture to the stable host, not the row originally touched.
       parent.setPointerCapture(event.pointerId);
@@ -295,6 +392,13 @@ export function useTerminal(
       if (point.x === event.clientX && point.y === event.clientY) return;
       point.x = event.clientX;
       point.y = event.clientY;
+      if (selecting) {
+        extendSelection(point);
+        return;
+      }
+      // Preserve sub-row scrolling, but tolerate finger jitter before long press.
+      if (Math.hypot(point.x - touchX, point.y - wheelY) >= 8)
+        cancelLongPress();
       moved = true;
       if (pointers.size === 2 && pinchDistance > 0) {
         setFontSize((pinchFont * distance()) / pinchDistance);
@@ -324,6 +428,7 @@ export function useTerminal(
     const pointerUp = (event: PointerEvent) => {
       if (disposed || !pointers.has(event.pointerId)) return;
       event.stopPropagation();
+      cancelLongPress();
       if (moved) event.preventDefault();
       pointers.delete(event.pointerId);
       if (parent.hasPointerCapture(event.pointerId))
@@ -342,6 +447,7 @@ export function useTerminal(
     };
     const blockNativeTouch = (event: TouchEvent) => {
       event.stopPropagation();
+      if (selecting) event.preventDefault();
       if (event.type === "touchmove" || (event.type === "touchend" && moved))
         event.preventDefault();
     };
@@ -366,6 +472,11 @@ export function useTerminal(
       capture: true,
       passive: true,
     });
+    const contextMenu = (event: MouseEvent) => {
+      // Native touch menus target xterm's hidden input, not its rendered buffer.
+      if (pointers.size || selecting || selection) event.preventDefault();
+    };
+    parent.addEventListener("contextmenu", contextMenu);
     term.attachCustomKeyEventHandler((event) => {
       if (event.type === "keydown" && event.ctrlKey && event.shiftKey) {
         if (event.key.toLowerCase() === "c") {
@@ -397,9 +508,11 @@ export function useTerminal(
       parent.removeEventListener("touchmove", blockNativeTouch, true);
       parent.removeEventListener("touchend", blockNativeTouch, true);
       parent.removeEventListener("touchcancel", blockNativeTouch, true);
+      parent.removeEventListener("contextmenu", contextMenu);
       input.dispose();
       resize.dispose();
-      colors.removeEventListener("change", theme);
+      selected.dispose();
+      colors.disconnect();
       ws.close();
       term.dispose();
       terminal = undefined;
@@ -429,6 +542,15 @@ export function useTerminal(
     },
     get error() {
       return error;
+    },
+    get selection() {
+      return selection;
+    },
+    copySelection() {
+      if (selection) clipboard.copySelection(selection);
+    },
+    clearSelection() {
+      terminal?.clearSelection();
     },
     send,
     setFontSize,

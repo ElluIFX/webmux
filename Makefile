@@ -4,7 +4,7 @@ PNPM ?= pnpm
 GOFMT ?= gofmt
 LDFLAGS = -s -w -X main.version=$(VERSION)
 
-.PHONY: web build release check test format format-check install
+.PHONY: web build release check test test-unit test-browser test-e2e test-browsers-install format format-check install
 web:
 	$(PNPM) --dir web install --frozen-lockfile
 	$(PNPM) --dir web build
@@ -23,6 +23,18 @@ check: web format-check
 test:
 	$(GO) test -race ./...
 	$(PNPM) --dir web test
+
+test-unit:
+	$(PNPM) --dir web test:unit
+
+test-browser:
+	$(PNPM) --dir web test:browser
+
+test-e2e:
+	$(PNPM) --dir web test:e2e
+
+test-browsers-install:
+	$(PNPM) --dir web exec playwright install --with-deps chromium
 
 format:
 	$(GOFMT) -w cmd internal web/embed.go

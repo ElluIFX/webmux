@@ -22,7 +22,7 @@ make build
 - `make build`：构建内嵌静态资源的单二进制 `bin/webmux`。
 - `make release VERSION=0.1.0`：生成 `bin/webmux-linux-amd64`、`bin/webmux-linux-arm64`，CGO 禁用。
 - `make install`：构建并安装到 `~/.local/bin/webmux`。
-- `make test`：Go race 测试、前端控制键行为测试与 Chromium 目录选择器 / 终端组件测试。
+- `make test`：Go race 测试、Vitest 单元 / Chromium 组件测试与 Playwright 真实后端端到端测试。
 - `make check`：Svelte / TypeScript 检查、Vite 构建、格式检查、`go vet`、golangci-lint 默认规则。需先将 `golangci-lint` 放到 PATH。
 - `make format`：gofmt 格式化所有 Go 文件，Prettier 格式化前端代码、配置与文档。
 - `make format-check`：检查格式，不修改文件；构建产物和依赖目录除外。
@@ -114,6 +114,8 @@ WebMux 不内置 TLS。需要安全上下文与系统剪贴板 API 时，可用 
 
 VisualViewport 跟随键盘高度与安全区域，横竖屏自动 fit；支持单指滚动、双指字体缩放（12–20 px）、可折叠软键栏。单指向下滑查看更早内容，向上滑查看后续内容：普通终端滚动历史，omp 等全屏面板按应用启用的鼠标 / 光标键模式处理滚轮。指针捕获到稳定容器，应用重绘行节点不会中断手势；滑动或缩放不会唤起键盘，轻点仍可聚焦。双指变单指、取消手势时重新建立基线，避免跳动。Ctrl / Alt 为一次性修饰键。终端输入禁用自动大写、拼写检查与自动纠正。常用 Ctrl+C/D/Z/L/R、Esc、Tab、方向、Home/End、PgUp/PgDn 都有按钮。
 
+长按终端文字约 0.5 秒选中词语，保持按住并拖动可跨行扩选，松手后点击“复制选中”；“取消选择”清除选区。中文、emoji 的双宽字符按完整字符选择，不会因长按或拖动唤起键盘或发送终端输入。无剪贴板权限时展示选中的纯文本，可在文本框内使用系统选择与复制；滑动和双指缩放仍按原行为工作。
+
 软键栏第一行优先排列 `⌨`、`/`、`@`，无需横向滚动即可操作。键盘按钮切换终端输入焦点；`/`、`@` 按普通字符输入，按下时保持终端焦点。
 
 终端顶部菜单左侧提供全屏 / 退出全屏按钮，通过浏览器原生 Fullscreen API 请求隐藏导航界面；浏览器或系统退出全屏时，按钮状态自动同步，离开终端页也会退出本页开启的全屏。菜单、字体设置等弹层在全屏内仍可使用。浏览器原生地址栏 / 工具栏不能用页面 CSS 强制隐藏；不支持网页全屏时会提示，可尝试“添加到主屏幕”以独立模式打开（页面已配置 standalone 与 iOS 主屏幕元信息）。
@@ -147,6 +149,8 @@ Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照�
 
 前端使用 Svelte 5 / TypeScript / Vite / xterm 5，基础控件来自官方 [shadcn-svelte](https://www.shadcn-svelte.com/docs/installation/vite)，采用 Tailwind CSS 主题与 Svelte runes 状态。桌面 Dialog / 移动 Drawer、下拉菜单、关闭确认、目录补全和字体 Slider 均复用库组件。终端页懒加载，WebGL 不可用、上下文丢失，或浏览器报告的实际像素尺寸与 CSS 尺寸 × DPR 不一致时，回退 xterm 内置 DOM 渲染器并重绘现有缓冲，不重置终端或重连会话。正常的像素取整误差不会触发回退；DPR 改变时重新测量。终端与组件使用同一组 GitHub Dark / Light CSS 变量。
 
+终端文字启用最低 4.5:1 对比度校正，应用显式输出黑色 ANSI / RGB 输入文字时也能在暗色背景上辨认；不改写 PTY 数据或应用的颜色转义序列。
+
 `web/src/schemas.ts` 使用 Zod 定义会话、预设、列表事件、退出信息、健康检查、目录和本地设置契约，类型由 schema 推导。HTTP 响应和 WebSocket JSON 必须解析成功才进入页面状态；损坏的本地设置回到有效默认值。PTY 原始字节不转成 JSON，仍按二进制透传。
 
 ## 开发
@@ -155,13 +159,22 @@ Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照�
 pnpm --dir web install --frozen-lockfile
 pnpm --dir web dev
 go test -race ./...
-pnpm --dir web test
-pnpm --dir web test:browser # 只运行浏览器组件回归测试
+pnpm --dir web test # unit + browser + e2e
+pnpm --dir web test:unit # Vitest Node 单元测试
+pnpm --dir web test:browser # Vitest 浏览器组件测试
+pnpm --dir web test:e2e # Playwright 真实后端端到端测试
+pnpm --dir web test:e2e:report # 查看上一次 HTML 报告
 make format
 make check
 ```
 
-组件测试使用 Vitest Browser、Playwright Chromium 与真实 Svelte / Tailwind / xterm 渲染，不依赖正在运行的后端。首次运行前执行 `pnpm --dir web exec playwright install chromium`；Linux 若缺少浏览器系统库，可按 Playwright 提示安装。目录选择器测试覆盖长列表滚动、拖动条可见性、间距、小屏布局、键盘导航、显式确认、隐藏目录、错误恢复和过期响应；终端测试覆盖 DPR / 实际像素尺寸不一致时的可视回退与历史保留、正常像素取整、WebGL 不可用与上下文丢失、输入及卸载清理。触摸回归通过 Chromium CDP 真实手势验证历史滚动、重绘期间指针捕获与全屏滚轮协议，并覆盖双指转单指、取消和聚焦行为。
+首次安装依赖后执行 `make test-browsers-install`（安装 Chromium 和 Linux 系统依赖；系统依赖可能需要 sudo）。已有系统库时可只执行 `pnpm --dir web exec playwright install chromium`。`make test-unit`、`make test-browser`、`make test-e2e` 分别运行三个测试层。
+
+- **Vitest 单元测试**：Node 环境，覆盖 Ctrl / Alt 控制字节、组合顺序与 Unicode / 多字符输入边界。
+- **Vitest 浏览器组件测试**：真实 Svelte / Tailwind / xterm 渲染，不需要后端。覆盖目录选择器导航 / 滚动 / 错误恢复、WebGL 与 DOM 渲染回退、DPR、历史保留、触控滚动 / 缩放 / 取消、暗色对比度与中文长按扩选。
+- **Playwright 端到端测试**：桌面与 Pixel 7 触控 Chromium，每个 worker 自动启动真实 Go 服务与 Vite，使用临时 HOME / 工作目录、无 rc 的 Bash、独立动态端口，结束自动关闭进程和清理会话；不连接开发服务器或已有会话。覆盖 UI 创建、真实 PTY 键盘输入、刷新回放、退出码、关闭 / 移除、暗色 ANSI 输入、移动长按 / 跨行复制和剪贴板拒绝后的文本回退。端到端使用 DOM 渲染器断言文字，WebGL 由组件测试覆盖。
+
+GitHub Actions 自动安装依赖和浏览器，运行构建及全部测试；失败保留截图、trace、video、服务日志与 PTY 缓冲，报告位于 `web/playwright-report`，附件位于 `web/test-results`。移动模拟不能替代 iOS Safari / Android 系统原生选择菜单与键盘的真机验证。
 
 Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被拒绝。生产不需要开发 Origin。
 

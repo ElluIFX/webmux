@@ -3,6 +3,8 @@
 /web/dist/*
 !/web/dist/.gitkeep
 /web/.vitest/
+/web/test-results/
+/web/playwright-report/
 *.log
 *:Zone.Identifier
 /acceptance.local/

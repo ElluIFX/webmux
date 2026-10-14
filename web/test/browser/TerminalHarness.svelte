@@ -2,16 +2,15 @@
   import { useTerminal } from "../../src/hooks/terminal.svelte";
 
   let container: HTMLDivElement;
+  let copied = $state("");
   const terminal = useTerminal(() => container, "terminal-render-fixture", {
     paste: () => {
       throw new Error(
         "Unexpected clipboard paste in terminal rendering fixture",
       );
     },
-    copySelection: () => {
-      throw new Error(
-        "Unexpected clipboard copy in terminal rendering fixture",
-      );
+    copySelection: (text) => {
+      copied = text;
     },
   });
 </script>
@@ -29,4 +28,8 @@
   >
   <output aria-label="Terminal error">{terminal.error}</output>
   <button onclick={() => terminal.focus()}>Focus terminal input</button>
+  <output aria-label="Terminal selection">{terminal.selection}</output>
+  <output aria-label="Copied terminal text">{copied}</output>
+  <button onclick={() => terminal.copySelection()}>Copy selection</button>
+  <button onclick={() => terminal.clearSelection()}>Clear selection</button>
 </div>

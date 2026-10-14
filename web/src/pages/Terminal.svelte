@@ -250,6 +250,18 @@
   {/if}
   <div class="terminal-area">
     <div class="terminal-host" bind:this={container}></div>
+    {#if t.selection}
+      <div
+        class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
+        role="toolbar"
+        aria-label="终端文字选择"
+      >
+        <Button size="sm" onclick={() => t.copySelection()}>复制选中</Button>
+        <Button variant="ghost" size="sm" onclick={() => t.clearSelection()}
+          >取消选择</Button
+        >
+      </div>
+    {/if}
     {#if t.restoring && t.connection !== "missing"}<div
         class="restore-overlay"
         role="status"
@@ -302,7 +314,7 @@
 <Dialog.Root bind:open={copyOpen}>
   <Dialog.Content class="sm:max-w-lg" onCloseAutoFocus={focusTerminal}>
     <Dialog.Header
-      ><Dialog.Title>复制缓冲</Dialog.Title><Dialog.Description
+      ><Dialog.Title>复制终端文字</Dialog.Title><Dialog.Description
         >当前环境不支持剪贴板访问，请长按或全选复制。</Dialog.Description
       ></Dialog.Header
     >

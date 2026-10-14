@@ -16,6 +16,7 @@ const nativeTouchGesture = defineBrowserCommand(
     { page, frame },
     points: { x: number; y: number }[],
     finish: "end" | "cancel" = "end",
+    holdMilliseconds = 0,
   ) => {
     const testFrame = await frame();
     const bounds = await (await testFrame.frameElement()).boundingBox();
@@ -42,6 +43,11 @@ const nativeTouchGesture = defineBrowserCommand(
             },
           ],
         });
+        if (index === 0 && holdMilliseconds > 0) {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          setTimeout(resolve, holdMilliseconds);
+          await promise;
+        }
         // Real frames give Chrome time to recognize a native pan/cancel instead
         // of collapsing a whole swipe into one synchronous DOM event burst.
         await testFrame.evaluate(
