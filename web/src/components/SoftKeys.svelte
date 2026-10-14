@@ -16,6 +16,7 @@
     keyboard: () => void;
   } = $props();
   let collapsed = $state(false);
+  const symbols = ["/", "@"] as const;
   const keys = [
     ["Esc", "\x1b"],
     ["Tab", "\t"],
@@ -51,6 +52,21 @@
   >
   {#if !collapsed}
     <div class="soft-row">
+      <Button
+        variant="outline"
+        size="sm"
+        aria-label="唤起或收起键盘"
+        onpointerdown={keepFocus}
+        onclick={keyboard}>⌨</Button
+      >
+      {#each symbols as symbol (symbol)}
+        <Button
+          variant="outline"
+          size="sm"
+          onpointerdown={keepFocus}
+          onclick={() => send(symbol)}>{symbol}</Button
+        >
+      {/each}
       {#each keys.slice(0, 2) as [label, input] (label)}<Button
           variant="outline"
           size="sm"
@@ -78,13 +94,6 @@
         size="sm"
         onpointerdown={keepFocus}
         onclick={paste}>粘贴</Button
-      >
-      <Button
-        variant="outline"
-        size="sm"
-        aria-label="唤起或收起键盘"
-        onpointerdown={keepFocus}
-        onclick={keyboard}>⌨</Button
       >
     </div>
     <div class="soft-row">
