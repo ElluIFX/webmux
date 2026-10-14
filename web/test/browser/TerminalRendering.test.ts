@@ -383,7 +383,10 @@ async function swipe(
   horizontal = 0,
 ) {
   const height = geometry(socket).row;
-  const steps = 8;
+  // Every step must clear the 8 px long-press jitter tolerance. Smaller steps
+  // let a slow runner reach the 500 ms long press mid-swipe and select instead.
+  const travel = Math.hypot(horizontal, lines * height);
+  const steps = Math.max(1, Math.min(8, Math.floor(travel / 8)));
   await commands.nativeTouchGesture(
     Array.from({ length: steps + 1 }, (_, index) => ({
       x: start.x + (horizontal * index) / steps,
