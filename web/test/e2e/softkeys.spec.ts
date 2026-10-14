@@ -50,9 +50,11 @@ test("mobile soft keys stay in one row with paste visible and all keys reachable
   await bar
     .getByRole("button", { name: "Ctrl+R", exact: true })
     .scrollIntoViewIfNeeded();
+  // Scroll offsets snap to device pixels (DPR 2.625 here), so the last key can
+  // stay clipped by a fraction of a CSS pixel at maximum scroll.
   await expect(
     bar.getByRole("button", { name: "Ctrl+R", exact: true }),
-  ).toBeInViewport({ ratio: 1 });
+  ).toBeInViewport({ ratio: 0.99 });
   await paste.scrollIntoViewIfNeeded();
   await expect(paste).toBeInViewport({ ratio: 1 });
   await keyboard.click();

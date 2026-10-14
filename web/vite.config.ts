@@ -8,6 +8,11 @@ export default defineConfig({
     alias: { $lib: fileURLToPath(new URL("./src/lib", import.meta.url)) },
   },
   build: { outDir: "dist", emptyOutDir: true },
+  // The terminal page is lazy. Without pre-bundling, the dev server discovers
+  // xterm on the first terminal visit, re-optimizes and force-reloads the page.
+  optimizeDeps: {
+    include: ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-webgl"],
+  },
   server: {
     proxy: {
       "/api": "http://127.0.0.1:7681",
