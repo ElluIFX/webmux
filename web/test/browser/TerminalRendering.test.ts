@@ -723,7 +723,9 @@ test("native Chrome swipes keep scrolling visibly through row redraws without ke
   expect(document.activeElement).not.toBe(textarea);
   expect(focused).not.toHaveBeenCalled();
   expectNoSessionMutation(socket);
-}, 20000);
+  // About 20 real swipes, each waiting two animation frames per touch step:
+  // ~10 s on Linux CI, over 20 s on hosted macOS runners.
+}, 60000);
 
 test("native fullscreen gestures report row-scaled SGR wheel input at stable starting cells", async () => {
   observeGlyphPixels(true);
