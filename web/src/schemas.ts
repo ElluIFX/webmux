@@ -118,4 +118,9 @@ export const FontSizeSchema = z.coerce.number().int().min(12).max(20);
 export const ThemeSchema = z.enum(["light", "dark"]);
 export type Theme = z.infer<typeof ThemeSchema>;
 export const TextSettingSchema = z.string();
+export const PreviewSettingsSchema = z.object({
+  lines: z.number().int().min(1).max(50),
+  skip: z.number().int().min(0).max(50),
+});
+export type PreviewSettings = z.infer<typeof PreviewSettingsSchema>;
 export const NoContentSchema = z.undefined();

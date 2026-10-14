@@ -60,14 +60,16 @@ WebMux 是一个运行在单台 Linux 或 macOS 机器上的 Go 单二进制 Web
 
 ### 3.1 欢迎页 `/`
 
-顶部保留品牌、连接状态、主题与“新建会话”，提供“添加仓库”和“刷新 Git 状态”。正文按注册顺序展示无边框仓库分组标题，仓库内主工作区优先，其余工作树按规范路径排序；组内会话按最近活跃时间排序，输出更新不重排上层分组。仓库通过 shadcn Collapsible 折叠，工作树 / 目录是唯一一层 Card，内部使用无边框 Item 会话列表与 Separator，不再嵌套卡片。标题保留运行 / 等待 / 退出数量。空组仍保留操作入口；未注册会话按 cwd 展示在“直接会话”，原工作树失效的会话在仓库内“已不可用工作区”保留，每个会话只出现一次。桌面单列展示工作树，手机将会话状态和活动信息换到标题下方；路径完整换行，输出预览为固定三行观察窗。
+顶部保留品牌、连接状态、主题与“新建会话”，提供“设置”“添加仓库”和“刷新 Git 状态”。正文按注册顺序展示无边框仓库分组标题，仓库内主工作区优先，其余工作树按规范路径排序；组内会话按最近活跃时间排序，输出更新不重排上层分组。仓库通过 shadcn Collapsible 折叠，工作树 / 目录是唯一一层 Card，内部使用无边框 Item 会话列表与 Separator，不再嵌套卡片。标题保留运行 / 等待 / 退出数量。空组仍保留操作入口；未注册会话按 cwd 展示在“直接会话”，原工作树失效的会话在仓库内“已不可用工作区”保留，每个会话只出现一次。桌面单列展示工作树，手机将会话状态和活动信息换到标题下方；路径完整换行，输出预览观察窗的高度跟随本地设置。
 
 每条会话显示：
 
 - **标题**：OSC title，没有则工作目录名（basename）
 - **状态点 + 文字**：运行中（绿色，有输出流动）、等待输入（黄色，2 秒无输出且光标停在提示符）、空闲（灰色，30 秒以上无输出）、已退出（红色，显示退出码）
 - **最近活跃时间**（相对时间，如“3 分钟前”）
-- **输出预览**：当前终端屏幕底部三条非空行，独立背景、等宽字体、固定三行高度；空屏幕显示等待提示，少于三行保留空余高度。光标移动、擦行和重绘更新对应屏幕内容，不把旧状态栏当作新增输出行。长行横向裁切、不再次换行，不增加嵌套卡片边框；明暗主题均与卡片背景区分。
+- **输出预览**：默认跳过当前终端屏幕末尾一条非空行，再向上显示十条非空行；独立背景、等宽字体、高度跟随设定行数。空屏幕显示等待提示，内容不足时保留空余高度，内容全部被跳过时显示隐藏提示。光标移动、擦行和重绘更新对应屏幕内容，不把旧状态栏当作新增输出行。长行横向裁切、不再次换行，不增加嵌套卡片边框；明暗主题均与卡片背景区分。
+
+`/settings` 设置页提供“显示行数”（1–50）和“跳过末尾行数”（0–50），默认分别为 10 和 1；0 表示保留末尾内容。按当前屏幕非空行顺序先排除末尾行，再取剩余内容的最后 N 行，不访问滚动历史。效果示例随有效输入即时更新，支持恢复默认。设置经过 Zod 验证后自动保存到当前浏览器 localStorage，刷新后保留；无效输入不覆盖已有值。设置不修改原始终端数据、不影响服务端状态探测，也不跨设备同步。
 
 会话行交互：
 
@@ -186,7 +188,7 @@ type Session struct {
     title     string     // OSC 解析结果，空则用 filepath.Base(Cwd)
     userTitle string     // 预留：手动改名
     lastOut   time.Time  // 最近一次有输出的时间
-    preview   Preview    // 只读终端屏幕状态；底部三条非空行，末行供状态探测使用
+    preview   Preview    // 只读终端屏幕状态；底部最多 100 条非空行，末行供状态探测使用
     status    Status
     exitCode  *int
 
@@ -203,7 +205,7 @@ type Session struct {
 3. 环境变量：继承服务进程环境，并显式设置 `TERM=xterm-256color`、`COLORTERM=truecolor`、`LANG`（继承）、`WEBMUX_SESSION_ID=<id>`
 4. `pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})` 启动；初始尺寸随后由第一个附着的客户端 resize 覆盖
 5. 启动三个 goroutine：
-   - **reader**：循环 `pty.Read` 到 32 KB 临时缓冲 → 写入 ring → 喂给 OSC 扫描器和三行 Preview 提取器 → 更新 `lastOut` → 广播给所有 `subs`（非阻塞，慢客户端用带缓冲 channel，满则断开该客户端让它重连回放）
+   - **reader**：循环 `pty.Read` 到 32 KB 临时缓冲 → 写入 ring → 喂给 OSC 扫描器和屏幕 Preview 提取器 → 更新 `lastOut` → 广播给所有 `subs`（非阻塞，慢客户端用带缓冲 channel，满则断开该客户端让它重连回放）
    - **waiter**：`proc.Wait()` 返回后设置 `exitCode`、`status = exited`、关闭 pty、关闭 `done`，广播状态变更
    - **status ticker**：每 1 秒评估一次状态（见 5.5），变化时广播到 `/ws/sessions`
 6. `Manager.Close(id)`：先发 `SIGHUP` 给进程组（`syscall.Kill(-pid, SIGHUP)`，启动时设置 `Setsid: true`），5 秒后仍未退出则 `SIGKILL`
@@ -248,9 +250,9 @@ else → waiting   // 2–30s 无输出且判断不出来，倾向提示用户�
 - `foregroundBlockedOnRead`：取每秒一次的进程表（Linux 为 `/proc/*/stat`，macOS 为 `sysctl kern.proc.all` 加 `proc_pidinfo` 的运行线程数），若整棵进程树（按 ppid 遍历）里没有 `R` 状态进程且叶子进程为 `S`，视为阻塞；其他平台此函数返回 false
 - 状态只是展示用，不驱动任何自动化动作，误判无害
 
-### 5.6 三行输出预览
+### 5.6 可配置输出预览
 
-`Preview` 使用固定版本的 `github.com/0magnet/xterm-go/vt` 只读跟踪终端屏幕，初始为 80×24，成功调整 PTY 尺寸后同步 resize。处理跨 chunk 的 UTF-8、光标寻址、回车、擦行/清屏、滚动、宽字符以及主/备用屏幕切换；不按收到的换行片段累计历史。仅从当前屏幕底部提取三条非空行，每行最多 120 个 Unicode 字符，以换行连接为不可变 `preview` 字符串，保留缩进，不截断 UTF-8 或组合字符单元。重复的实际屏幕行仍分别保留，清空屏幕后预览和提示符探测文本同时清空。状态探测读取底部单行，不能用三行拼接结果判断提示符。
+`Preview` 使用固定版本的 `github.com/0magnet/xterm-go/vt` 只读跟踪终端屏幕，初始为 80×24，成功调整 PTY 尺寸后同步 resize。处理跨 chunk 的 UTF-8、光标寻址、回车、擦行/清屏、滚动、宽字符以及主/备用屏幕切换；不按收到的换行片段累计历史。仅从当前屏幕底部提取最多 100 条非空行，每行最多 120 个 Unicode 字符，以换行连接为不可变 `preview` 字符串，供浏览器按本地行数与末尾偏移裁剪；保留缩进，不截断 UTF-8 或组合字符单元。重复的实际屏幕行仍分别保留，清空屏幕后预览和提示符探测文本同时清空。状态探测始终读取真实底部单行，不受浏览器隐藏末尾行的设置影响。
 
 预览屏幕不保留额外 scrollback，不注册向 PTY 发送数据的回调；设备查询应仅由真实浏览器终端回应。屏幕状态由 `Session.mu` 保护，不增加连接或后台 goroutine。原始 PTY 字节仍直接进入 ring 和 xterm，预览侧解析不会改写终端帧或回放。构建需要 Go 1.24+。
 
@@ -317,7 +319,7 @@ interface SessionInfo {
   cmd: string[];
   status: "running" | "waiting" | "idle" | "exited";
   exitCode: number | null;
-  preview: string; // 当前屏幕底部三条非空行，以 \n 分隔；每行最多 120 个 Unicode 字符
+  preview: string; // 当前屏幕底部最多 100 条非空行，以 \n 分隔；每行最多 120 个 Unicode 字符
   createdAt: string; // RFC3339
   lastActiveAt: string;
   cols: number;
@@ -385,10 +387,11 @@ interface Preset {
 
 ### 7.1 页面与路由
 
-用 `history` 与 `popstate` 管理两个路由：
+用 `history` 与 `popstate` 管理页面路由：
 
 - `/` → `SessionListPage`
 - `/s/:id` → `TerminalPage`
+- `/settings` → `Settings`
 
 `index.html` 需要：`<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">`，`interactive-widget=resizes-content` 让 Android Chrome 弹出键盘时缩小视口而不是遮挡终端；iOS 用 `visualViewport` API 监听处理（见 7.4）。加 `manifest.webmanifest` 和 `apple-mobile-web-app-capable`，用户可“添加到主屏幕”全屏运行。
 
@@ -396,7 +399,7 @@ interface Preset {
 
 - 挂载时读取 `/api/presets`、`/api/config`、`/api/repositories` 并连接 `/ws/sessions`，首个会话 snapshot 到达前显示骨架屏；Git 快照加载独立于会话流
 - 会话列表保存在 Svelte `$state` 数组中，事件经 Zod discriminated union 校验后按 id 更新
-- `WorkspaceGroup` 使用单层 shadcn Card 展示工作树 / 目录，内部 `SessionRow` 使用无边框 Item 和 Separator：会话标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、退出码、连接设备数、相对时间（每 30 秒刷新一次）、`preview` 三行终端观察窗。观察窗使用 `pre` 保留逻辑换行，独立背景和固定三行高度，长行裁切且不撑宽移动页面；正文、标题和控件使用系统无衬线字体，路径和终端输出保留等宽字体。
+- `WorkspaceGroup` 使用单层 shadcn Card 展示工作树 / 目录，内部 `SessionRow` 使用无边框 Item 和 Separator：会话标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、退出码、连接设备数、相对时间（每 30 秒刷新一次）、按本地设置裁剪的 `preview` 终端观察窗。观察窗使用 `pre` 保留逻辑换行，独立背景，高度跟随设定行数，长行裁切且不撑宽移动页面；正文、标题和控件使用系统无衬线字体，路径和终端输出保留等宽字体。
 - 仓库标题使用 Collapsible，工作树和会话不再二次折叠；稳定分组、局部错误与空工作树行为见 3.1。只有既无仓库又无会话时显示 shadcn Empty 整页空状态，无需先登记仓库即可直接启动。
 - `NewSessionSheet`：移动端使用 shadcn Drawer，桌面端使用 Dialog；字段见产品设计 3.2。`DirectoryPicker` 使用 Popover + Command + ScrollArea，仅打开时按路径输入 `debounce 150ms` 请求 `/api/fs/dirs`，支持键盘导航、确认当前目录、隐藏目录切换、加载与错误状态；浏览中的路径与表单工作目录分离。输入、列表与确认区保持间距，目录区域限制最大高度并使用固定可见、可拖动的滚动条，路径和确认区不随目录列表滚动。最近目录存 localStorage `webmux.recentDirs`（最多 10 个），自定义命令存 `webmux.customCommand`。
 - WebSocket 断开时顶部显示黄色细条“连接已断开，重连中…”，自动重连
@@ -618,7 +621,7 @@ webmux/
 | M1  | 核心 Session | `session` 包：PTY 启动、ring、reader/waiter、Close；单元测试覆盖 ring 和 osc 状态机 | `go test ./...` 通过；一个临时 main 能启动 bash 并把输出打到 stdout                       |
 | M2  | 协议与 API   | `api` + `hub`：REST 全部端点、两个 WebSocket、二进制帧协议、token 中间件            | `curl` 创建会话；用 `websocat` 附着并能交互；断开再附着能收到快照                         |
 | M3  | 最小前端     | 终端页可用：xterm + fit + 重连回放；欢迎页能列出、新建、进入、关闭                  | 桌面浏览器完整走通；杀掉浏览器标签后重开能看到历史                                        |
-| M4  | 状态与 title | OSC 解析、状态探测、三行输出预览、列表实时更新                                      | 开 `claude` 后列表显示其 title；等待权限确认时状态变为“等待输入”                          |
+| M4  | 状态与 title | OSC 解析、状态探测、可配置输出预览、列表实时更新                                    | 开 `claude` 后列表显示其 title；等待权限确认时状态变为“等待输入”                          |
 | M5  | 移动端打磨   | 软键栏、键盘视口处理、粘贴回退、字体缩放、PWA manifest、深色主题                    | iOS Safari 和 Android Chrome 真机：能在 `claude` 里输入中文、按 Esc、粘贴多行、横竖屏切换 |
 | M6  | 打包与文档   | Makefile、交叉编译、systemd 文件、README（安装、配置、Tailscale 访问、FAQ）         | 在一台干净的 Linux 上按 README 从零部署成功                                               |
 

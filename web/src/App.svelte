@@ -7,6 +7,7 @@
   import { Label } from "$lib/components/ui/label";
   import * as Card from "$lib/components/ui/card";
   import SessionList from "./pages/SessionList.svelte";
+  import Settings from "./pages/Settings.svelte";
 
   let path = $state(location.pathname);
   let ready = $state(false);
@@ -93,6 +94,8 @@
       {error instanceof Error ? error.message : "终端加载失败"}
     </p>
   {/await}
+{:else if path === "/settings"}
+  <Settings />
 {:else}
   <SessionList />
 {/if}

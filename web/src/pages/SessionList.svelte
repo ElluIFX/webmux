@@ -209,6 +209,7 @@
         <Button disabled={!presets.length} onclick={() => start()}
           >＋ 新建会话</Button
         >
+        <Button href="/settings" variant="outline">设置</Button>
         <Button
           variant="outline"
           class="shrink-0"

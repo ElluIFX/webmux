@@ -9,13 +9,13 @@ import (
 )
 
 const (
-	maxPreviewLines = 3
+	maxPreviewLines = 100
 	maxPreviewRunes = 120
 )
 
 // Preview observes the PTY's current screen, not its append-only output history.
 // It is owned by Session.mu; terminal replies must never reach the real PTY.
-// Only the bottom three nonempty screen rows are exposed as plain text.
+// Up to 100 bottom nonempty screen rows allow per-browser preview selection.
 type Preview struct {
 	screen *vt.Terminal
 	last   string // Bottom nonempty screen row, used for status classification.

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { navigate, statusText } from "../api";
   import type { SessionInfo } from "../schemas";
+  import { previewSettings } from "../previewSettings.svelte";
+  import { selectPreview } from "../preview";
   import { Button } from "$lib/components/ui/button";
   import * as Item from "$lib/components/ui/item";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -24,6 +26,7 @@
         ? `${Math.floor(seconds / 60)} 分钟前`
         : `${Math.floor(seconds / 3600)} 小时前`,
   );
+  const preview = $derived(selectPreview(session.preview, previewSettings));
 </script>
 
 <Item.Root
@@ -78,8 +81,11 @@
       <pre
         data-slot="terminal-preview"
         aria-label="终端输出预览"
-        class="mt-1 h-[calc(3lh+1rem)] min-w-0 overflow-hidden bg-muted p-2 font-mono text-xs leading-5 whitespace-pre text-foreground dark:bg-background">{session.preview ||
-          "等待终端输出…"}</pre>
+        style:height={`calc(${previewSettings.lines}lh + 1rem)`}
+        class="mt-1 min-w-0 overflow-hidden bg-muted p-2 font-mono text-xs leading-5 whitespace-pre text-foreground dark:bg-background">{preview ||
+          (session.preview
+            ? "末尾行已隐藏，暂无可显示内容"
+            : "等待终端输出…")}</pre>
     </Item.Content>
   </a>
   <Item.Actions class="relative z-10">
