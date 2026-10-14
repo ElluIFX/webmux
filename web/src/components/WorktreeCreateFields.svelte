@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "../api";
+  import { suggestWorktreeBranch } from "../branchName";
   import { BranchesSchema, type Repository } from "../schemas";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -24,6 +25,21 @@
   let error = $state("");
   let loading = $state(false);
   let pathEdited = $state(false);
+  let branchEdited = $state(false);
+
+  function suggestedBranch(avoid?: string) {
+    if (!data) return "";
+    return suggestWorktreeBranch({
+      branchNames: data.branches.map((item) => item.name),
+      worktreePaths: repository.worktrees.map((tree) => tree.path),
+      avoid,
+    });
+  }
+  function fillSuggestedBranch() {
+    if (mode !== "new" || branchEdited || branch || !data) return;
+    branch = suggestedBranch();
+  }
+
   $effect(() => {
     const id = repository.id;
     let active = true;
@@ -31,14 +47,15 @@
     error = "";
     loading = true;
     pathEdited = false;
+    branchEdited = false;
     branch = "";
     base = "";
     void api(`/repositories/${id}/branches`, BranchesSchema)
       .then((value) => {
-        if (active) {
-          data = value;
-          base = value.defaultBase || "";
-        }
+        if (!active) return;
+        data = value;
+        base = value.defaultBase || "";
+        fillSuggestedBranch();
       })
       .catch((err) => {
         if (active) error = (err as Error).message;
@@ -75,8 +92,11 @@
         variant={mode === "new" ? "default" : "outline"}
         aria-pressed={mode === "new"}
         onclick={() => {
+          if (mode === "new") return;
           mode = "new";
+          branchEdited = false;
           branch = "";
+          fillSuggestedBranch();
         }}>创建新分支</Button
       >
       <Button
@@ -84,6 +104,7 @@
         variant={mode === "existing" ? "default" : "outline"}
         aria-pressed={mode === "existing"}
         onclick={() => {
+          if (mode === "existing") return;
           mode = "existing";
           branch = "";
         }}>使用已有分支</Button
@@ -96,9 +117,24 @@
     </p>{/if}
   {#if mode === "new"}
     <div class="space-y-2">
-      <Label for="worktree-branch">新分支名称</Label><Input
+      <div class="flex items-center justify-between gap-2">
+        <Label for="worktree-branch">新分支名称</Label>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!data || loading}
+          onclick={() => {
+            branch = suggestedBranch(branch || undefined);
+          }}>换一个</Button
+        >
+      </div>
+      <Input
         id="worktree-branch"
         bind:value={branch}
+        oninput={() => {
+          branchEdited = true;
+        }}
         required
         placeholder="feature/my-task"
         autocomplete="off"
@@ -106,6 +142,9 @@
         autocorrect="off"
         spellcheck={false}
       />
+      <p class="text-xs text-muted-foreground">
+        建议名避开已有本地分支和已有工作树目录段，可直接修改。
+      </p>
     </div>
     <div class="space-y-2">
       <Label for="worktree-base">起始基线</Label>
