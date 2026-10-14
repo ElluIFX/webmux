@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { tick, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
+  import RiFullscreenLine from "remixicon-svelte/icons/fullscreen-line";
+  import RiFullscreenExitLine from "remixicon-svelte/icons/fullscreen-exit-line";
   import { apiBuffer, navigate, statusText } from "../api";
   import { useTerminal } from "../hooks/terminal.svelte";
   import { useViewport } from "../hooks/viewport.svelte";
@@ -21,6 +23,10 @@
   let copyOpen = $state(false);
   let copyText = $state("");
   let settingsOpen = $state(false);
+  let fullscreen = $state(false);
+  let fullscreenBusy = $state(false);
+  let ownsFullscreen = false;
+  let mounted = false;
   const viewport = useViewport();
   const t = useTerminal(
     () => container,
@@ -34,6 +40,71 @@
       },
     },
   );
+
+  onMount(() => {
+    mounted = true;
+    const changed = () => {
+      fullscreen = Boolean(document.fullscreenElement);
+      if (!fullscreen) ownsFullscreen = false;
+    };
+    changed();
+    document.addEventListener("fullscreenchange", changed);
+    return () => {
+      mounted = false;
+      document.removeEventListener("fullscreenchange", changed);
+      if (
+        ownsFullscreen &&
+        document.fullscreenElement === document.documentElement
+      ) {
+        ownsFullscreen = false;
+        void document.exitFullscreen().catch((err) => {
+          console.error("离开终端时退出全屏失败", err);
+        });
+      }
+    };
+  });
+
+  async function toggleFullscreen() {
+    if (fullscreenBusy) return;
+    error = "";
+    if (
+      !document.fullscreenElement &&
+      (!document.fullscreenEnabled ||
+        typeof document.documentElement.requestFullscreen !== "function")
+    ) {
+      error =
+        "当前浏览器环境未开放网页全屏；可尝试“添加到主屏幕”以独立模式打开，减少浏览器底栏。";
+      return;
+    }
+    fullscreenBusy = true;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        ownsFullscreen = true;
+        // Fullscreen the document so body-level menus and dialogs remain visible.
+        await document.documentElement.requestFullscreen({
+          navigationUI: "hide",
+        });
+        if (
+          !mounted &&
+          ownsFullscreen &&
+          document.fullscreenElement === document.documentElement
+        ) {
+          ownsFullscreen = false;
+          await document.exitFullscreen();
+        }
+      }
+    } catch (err) {
+      if (!document.fullscreenElement) ownsFullscreen = false;
+      if (mounted)
+        error =
+          "切换全屏失败：" + (err instanceof Error ? err.message : String(err));
+      else console.error("切换全屏失败", err);
+    } finally {
+      if (mounted) fullscreenBusy = false;
+    }
+  }
 
   async function copyToClipboard(text: string) {
     try {
@@ -91,6 +162,21 @@
             ? "不存在"
             : "重连中"}</span
     >
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={fullscreen ? "退出全屏" : "全屏"}
+      title={fullscreen ? "退出全屏" : "全屏"}
+      aria-pressed={fullscreen}
+      aria-busy={fullscreenBusy}
+      disabled={fullscreenBusy}
+      onclick={() => {
+        void toggleFullscreen();
+      }}
+    >
+      {#if fullscreen}<RiFullscreenExitLine class="size-4" />
+      {:else}<RiFullscreenLine class="size-4" />{/if}
+    </Button>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props })}<Button

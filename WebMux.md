@@ -94,7 +94,7 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 
 布局自上而下：
 
-- **顶栏**（高度 44px）：返回按钮、会话 title、状态点、连接状态图标（已连接 / 重连中）、右侧菜单（复制全部缓冲、清屏、关闭会话、字体大小）
+- **顶栏**（高度 44px）：返回按钮、会话 title、状态点、连接状态图标（已连接 / 重连中）、全屏 / 退出全屏按钮、右侧菜单（复制全部缓冲、清屏、关闭会话、字体大小）
 - **终端区**：xterm.js，占满剩余空间；横屏和竖屏自动根据容器尺寸 fit，并把新 cols/rows 发回服务端 `SIGWINCH`
 - **软键栏**（仅触摸设备显示，可折叠）：按使用频率优先排列 `⌨`（唤起/收起系统键盘）、`/`、`@`，随后为 `Esc` `Tab` `Ctrl` `Alt` `↑` `↓` `←` `→` `Home` `End` `PgUp` `PgDn` `粘贴`。`Ctrl` 和 `Alt` 为粘滞键：点一下后下一个按键带修饰符，再点取消
 - 常用组合单独给按钮：`Ctrl+C`、`Ctrl+D`、`Ctrl+Z`、`Ctrl+L`、`Ctrl+R`，一行放不下时横向滚动
@@ -410,6 +410,7 @@ WebGL 渲染需要浏览器报告的实际像素尺寸与 CSS 尺寸 × DPR 一�
 这是产品能否真正用起来的关键，按以下规则实现：
 
 - **布局**：`height: 100dvh` 的 flex 列：顶栏 44px、终端 `flex: 1; min-height: 0`、软键栏 44px；safe-area 用 `env(safe-area-inset-*)` 补 padding
+- **全屏**：顶部菜单旁通过 `document.documentElement.requestFullscreen({navigationUI: "hide"})` 请求浏览器原生全屏，使用 `document.exitFullscreen()` 退出；对整个文档请求，确保 body 下的菜单 / Dialog portals 仍可见。监听 `fullscreenchange` 同步状态，阻止重复请求，离开终端页退出本页开启的全屏。平台不支持或拒绝请求时给出明确提示，不用 CSS 伪装成功；原生浏览器底栏能否隐藏由浏览器决定，可尝试主屏幕 standalone 模式。
 - **键盘弹出**：监听 `window.visualViewport` 的 `resize`，把根容器高度设为 `visualViewport.height`，并 `fit()`；iOS Safari 弹键盘时页面可能被整体推上去，需要在 resize 回调里 `window.scrollTo(0,0)`
 - **输入法**：xterm.js 自带的隐藏 textarea 在手机上行为正常，但要设置 `term.textarea.setAttribute('autocapitalize','off')`、`autocorrect=off`、`spellcheck=false`，否则 iOS 会自动大写首字母、把 `--` 换成破折号
 - **唤起键盘**：点击终端区域 `term.focus()`；软键栏的 `⌨` 按钮在已聚焦时 `term.blur()` 收起键盘
