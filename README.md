@@ -22,7 +22,7 @@ make build
 - `make build`：构建内嵌静态资源的单二进制 `bin/webmux`。
 - `make release VERSION=0.1.0`：生成 `bin/webmux-linux-amd64`、`bin/webmux-linux-arm64`，CGO 禁用。
 - `make install`：构建并安装到 `~/.local/bin/webmux`。
-- `make test`：Go race 测试、前端控制键行为测试与 Chromium 目录选择器组件测试。
+- `make test`：Go race 测试、前端控制键行为测试与 Chromium 目录选择器 / 终端组件测试。
 - `make check`：Svelte / TypeScript 检查、Vite 构建、格式检查、`go vet`、golangci-lint 默认规则。需先将 `golangci-lint` 放到 PATH。
 - `make format`：gofmt 格式化所有 Go 文件，Prettier 格式化前端代码、配置与文档。
 - `make format-check`：检查格式，不修改文件；构建产物和依赖目录除外。
@@ -141,7 +141,7 @@ Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照�
 
 快照将类型前缀与缓冲内容组装到一次分配中；每连接复用最多 64 KiB 的输出合并工作区，避免每个小输出帧都重新分配大缓冲。共享 PTY 输出片段保持不可变，合并和 WebSocket 写入只由该连接的单个 writer 执行。
 
-前端使用 Svelte 5 / TypeScript / Vite / xterm 5，基础控件来自官方 [shadcn-svelte](https://www.shadcn-svelte.com/docs/installation/vite)，采用 Tailwind CSS 主题与 Svelte runes 状态。桌面 Dialog / 移动 Drawer、下拉菜单、关闭确认、目录补全和字体 Slider 均复用库组件。终端页懒加载，WebGL 不可用或上下文丢失时回退 xterm 内置 DOM 渲染器；终端与组件使用同一组 GitHub Dark / Light CSS 变量。
+前端使用 Svelte 5 / TypeScript / Vite / xterm 5，基础控件来自官方 [shadcn-svelte](https://www.shadcn-svelte.com/docs/installation/vite)，采用 Tailwind CSS 主题与 Svelte runes 状态。桌面 Dialog / 移动 Drawer、下拉菜单、关闭确认、目录补全和字体 Slider 均复用库组件。终端页懒加载，WebGL 不可用、上下文丢失，或浏览器报告的实际像素尺寸与 CSS 尺寸 × DPR 不一致时，回退 xterm 内置 DOM 渲染器并重绘现有缓冲，不重置终端或重连会话。正常的像素取整误差不会触发回退；DPR 改变时重新测量。终端与组件使用同一组 GitHub Dark / Light CSS 变量。
 
 `web/src/schemas.ts` 使用 Zod 定义会话、预设、列表事件、退出信息、健康检查、目录和本地设置契约，类型由 schema 推导。HTTP 响应和 WebSocket JSON 必须解析成功才进入页面状态；损坏的本地设置回到有效默认值。PTY 原始字节不转成 JSON，仍按二进制透传。
 
@@ -152,12 +152,12 @@ pnpm --dir web install --frozen-lockfile
 pnpm --dir web dev
 go test -race ./...
 pnpm --dir web test
-pnpm --dir web test:browser # 只运行目录选择器组件回归测试
+pnpm --dir web test:browser # 只运行浏览器组件回归测试
 make format
 make check
 ```
 
-组件测试使用 Vitest Browser、Playwright Chromium 与真实 Svelte / Tailwind 样式，不依赖正在运行的后端。首次运行前执行 `pnpm --dir web exec playwright install chromium`；Linux 若缺少浏览器系统库，可按 Playwright 提示安装。测试覆盖长目录列表滚动与拖动条可见性、输入/列表/确认区间距、小屏布局、键盘导航、显式确认、隐藏目录、错误恢复和过期请求响应。
+组件测试使用 Vitest Browser、Playwright Chromium 与真实 Svelte / Tailwind / xterm 渲染，不依赖正在运行的后端。首次运行前执行 `pnpm --dir web exec playwright install chromium`；Linux 若缺少浏览器系统库，可按 Playwright 提示安装。目录选择器测试覆盖长列表滚动、拖动条可见性、间距、小屏布局、键盘导航、显式确认、隐藏目录、错误恢复和过期响应；终端测试覆盖 DPR / 实际像素尺寸不一致时的可视回退与历史保留、正常像素取整、WebGL 不可用与上下文丢失、输入及卸载清理。
 
 Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被拒绝。生产不需要开发 Origin。
 
@@ -204,4 +204,4 @@ shadcn 配置位于 `web/components.json`，生成的基础组件位于 `web/src
 
 **仍需真机环境**：iOS Safari / Android Chrome 的中文输入法、`--help` 自动替换行为、VPN 切换、系统键盘与锁屏解锁后 3 秒恢复；当前只确认了输入属性、视口处理和浏览器恢复机制。没有连接真实移动设备，不将这些条目标记为已通过。4G 首屏 1 秒目标也未在真实蜂窝网络测量。
 
-Chromium 高 DPR 模拟时，环境的 `device-pixel-content-box` 与设备像素比不一致，可能使 WebGL 截图空白；DPR 1 下的移动布局与真实 WebGL 输出、以及上下文丢失后的 DOM 回退均已观察验证。这不是实际 iOS GPU 行为的证明。
+Chrome 移动设备模拟器可能报告与 DPR 不一致的 `device-pixel-content-box` 尺寸，导致 WebGL 画布空白；现在会自动切换 DOM 渲染器。已在 412×924、DPR 2.625 的 Chromium 模拟中，通过现有真实 omp 会话观察到 logo、更新提示与终端提示符正常显示。该验证不代替实际 iOS GPU / Safari 真机验证。

@@ -391,6 +391,8 @@ try {
 }
 ```
 
+WebGL 渲染需要浏览器报告的实际像素尺寸与 CSS 尺寸 × DPR 一致。容器观察器发现差异超过 1 个物理像素时，释放 WebGL addon 并 `term.refresh()`，让 xterm 内置 DOM 渲染器显示现有缓冲；不 reset、不重连、不改变输入协议。忽略隐藏容器的零尺寸与缺少实际像素 API 的情况。正常尺寸继续使用 WebGL，上下文丢失也走同一回退路径。监听 resolution media query；DPR 改变时重新观察容器，以新测量判断一致性，避免使用旧 DPR 的尺寸。组件卸载时清理观察器、media query listener 与 fit 定时器。
+
 消息处理：
 
 - 收到 `0x01` 快照：`term.reset()` → `term.write(payload)` → 写入完成回调里 `term.scrollToBottom()`，隐藏“正在恢复”遮罩
@@ -399,7 +401,7 @@ try {
 - 收到 `0x03` 退出：显示“进程已退出（code n）”横幅，提供“返回列表”和“移除会话”按钮，终端保留可滚动
 - `term.onData(s)` → 发送 `0x00` + `TextEncoder.encode(s)`
 - `term.onResize({cols, rows})` → 发送 `0x01` + JSON
-- `ResizeObserver` 监听容器 → `fitAddon.fit()`（debounce 100 ms）
+- `ResizeObserver` 监听容器的实际像素尺寸，先检查 WebGL 尺寸一致性，再 `fitAddon.fit()`（debounce 100 ms）
 
 重连策略：`close` 事件后按 500 ms × 2^n（上限 8 s）重试，4408 慢客户端立即重连。回到前台主动重新附着，即使旧 socket 仍显示 OPEN，也不信任可能已失效的连接。收到快照时 reset 并回放。
 

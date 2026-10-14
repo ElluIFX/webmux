@@ -9,6 +9,9 @@ const { server: _applicationServer, ...sharedConfig } = viteConfig;
 export default mergeConfig(
   sharedConfig,
   defineConfig({
+    optimizeDeps: {
+      include: ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-webgl"],
+    },
     test: {
       include: ["test/browser/**/*.test.ts"],
       setupFiles: ["./test/browser/setup.ts"],

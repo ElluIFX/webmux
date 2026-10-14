@@ -87,12 +87,19 @@ export function useTerminal(
     term.loadAddon(fitAddon);
     term.open(parent);
     let webgl: WebglAddon | undefined;
+    const useDomRenderer = () => {
+      if (!webgl) return;
+      const addon = webgl;
+      webgl = undefined;
+      addon.dispose();
+      term.refresh(0, term.rows - 1);
+    };
     try {
       webgl = new WebglAddon();
       term.loadAddon(webgl);
-      webgl.onContextLoss(() => webgl?.dispose());
+      webgl.onContextLoss(useDomRenderer);
     } catch {
-      webgl?.dispose();
+      useDomRenderer();
       // xterm's built-in DOM renderer remains available without WebGL.
     }
     const colors = matchMedia("(prefers-color-scheme: light)");
@@ -163,11 +170,55 @@ export function useTerminal(
       ws.send(1, encoder.encode(JSON.stringify(size))),
     );
     let timer: number | undefined;
-    const observer = new ResizeObserver(() => {
+    const observer = new ResizeObserver(([entry]) => {
+      if (disposed) return;
+      if (webgl) {
+        const pixels = entry?.devicePixelContentBoxSize?.[0];
+        const css = entry?.contentRect;
+        const dpr = window.devicePixelRatio || 1;
+        // Chromium emulation can report physical pixels at the host DPR while
+        // xterm renders at the emulated DPR. The WebGL addon then shrinks its
+        // backing canvas without updating its render dimensions. DOM rendering
+        // avoids that incompatible measurement; allow normal pixel rounding.
+        if (
+          pixels &&
+          css.width > 0 &&
+          css.height > 0 &&
+          pixels.inlineSize > 0 &&
+          pixels.blockSize > 0 &&
+          (Math.abs(pixels.inlineSize - css.width * dpr) > 1 ||
+            Math.abs(pixels.blockSize - css.height * dpr) > 1)
+        ) {
+          useDomRenderer();
+        }
+      }
       clearTimeout(timer);
       timer = window.setTimeout(() => fitAddon.fit(), 100);
     });
-    observer.observe(parent);
+    const observeSize = () => {
+      try {
+        observer.observe(parent, { box: "device-pixel-content-box" });
+      } catch {
+        observer.observe(parent);
+      }
+    };
+    let resolution = matchMedia(
+      `(resolution: ${window.devicePixelRatio || 1}dppx)`,
+    );
+    const resolutionChanged = () => {
+      if (disposed) return;
+      resolution.removeEventListener("change", resolutionChanged);
+      resolution = matchMedia(
+        `(resolution: ${window.devicePixelRatio || 1}dppx)`,
+      );
+      resolution.addEventListener("change", resolutionChanged);
+      // A DPR change need not change the CSS box. Request a fresh observation
+      // rather than comparing the new DPR against stale physical dimensions.
+      observer.unobserve(parent);
+      observeSize();
+    };
+    resolution.addEventListener("change", resolutionChanged);
+    observeSize();
     const visible = () => {
       // Live sessions reattach in connect(); exited sessions cannot reopen that socket.
       if (!document.hidden && stale && exited) {
@@ -261,6 +312,7 @@ export function useTerminal(
       disposed = true;
       clearTimeout(timer);
       observer.disconnect();
+      resolution.removeEventListener("change", resolutionChanged);
       document.removeEventListener("visibilitychange", visible);
       parent.removeEventListener("touchstart", touchStart, true);
       parent.removeEventListener("touchmove", touchMove, true);
