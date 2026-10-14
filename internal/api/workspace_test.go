@@ -236,7 +236,7 @@ func TestWorkspaceMetadataUsesExistingWebSocketProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestWorkspaceMetadataUsesExistingWebSocketProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer terminal.CloseNow()
+	defer func() { _ = terminal.CloseNow() }()
 	kind, replay, err := terminal.Read(ctx)
 	if err != nil || kind != websocket.MessageBinary || len(replay) == 0 || replay[0] != 1 {
 		t.Fatalf("binary replay changed: %v %q %v", kind, replay, err)

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer as createPortReservation } from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -51,7 +51,9 @@ async function stopChild(child, group = false) {
 // Port zero asks the OS to allocate ports; no local developer server is reused.
 /** @param {{noGit?: boolean}} options @returns {Promise<E2EServer>} */
 export async function startE2EServer({ noGit = false } = {}) {
-  const root = await mkdtemp(join(tmpdir(), "webmux-e2e-"));
+  // macOS tmpdir() sits behind /var -> /private/var; the server reports
+  // canonical paths, so expectations must start from the canonical root.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "webmux-e2e-")));
   const workDir = join(root, "work");
   const home = join(root, "home");
   const binary = join(root, "webmux");
@@ -129,6 +131,8 @@ export async function startE2EServer({ noGit = false } = {}) {
             LANG: "C.UTF-8",
             LC_ALL: "C.UTF-8",
             PS1: "webmux-e2e$ ",
+            // Apple's /bin/bash otherwise prints a zsh migration banner.
+            BASH_SILENCE_DEPRECATION_WARNING: "1",
             HISTFILE: "/dev/null",
           },
         },

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -118,15 +118,10 @@ func TestCancelledGitCleansDescendantAfterLeaderExit(t *testing.T) {
 	}
 	deadline = time.Now().Add(time.Second)
 	for {
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-		if os.IsNotExist(err) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		fields := strings.Fields(string(data)[strings.LastIndex(string(data), ")")+1:])
-		if fields[0] == "Z" || fields[0] == "X" {
+		// ps reports nothing once the process is gone; Z means it already died.
+		out, _ := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+		state := strings.TrimSpace(string(out))
+		if state == "" || state[0] == 'Z' {
 			break
 		}
 		if time.Now().After(deadline) {

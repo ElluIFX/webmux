@@ -6,7 +6,7 @@ Oct 13, 2026 · @RainChan
 
 ## 1. 项目概述
 
-WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服务，用于在浏览器（尤其是手机和平板）里创建、查看、操作多个持久化终端会话，典型用途是远程遥控 Claude Code、Codex CLI 等命令行 agent。
+WebMux 是一个运行在单台 Linux 或 macOS 机器上的 Go 单二进制 Web 终端服务，用于在浏览器（尤其是手机和平板）里创建、查看、操作多个持久化终端会话，典型用途是远程遥控 Claude Code、Codex CLI 等命令行 agent。
 
 **核心问题**：ttyd 一类工具在浏览器断开后会话即终止，手机锁屏、切网、关浏览器都会丢掉正在运行的 agent。WebMux 把 PTY 的生命周期与浏览器连接解耦：会话由服务端持有，浏览器只是“附着”上去，随时断开、随时重连，重连后能看到断线期间的全部输出。
 
@@ -16,12 +16,12 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 - 欢迎页展示所有会话及其标题、工作目录、状态（运行中 / 等待输入 / 空闲 / 已退出）
 - 新建会话时可选工作目录和预设启动命令（如 `claude`、`codex`、`omp`），也可输入自定义命令
 - 手机 / 平板浏览器上可用：响应式布局、虚拟键盘友好、必要的软键（Esc、Ctrl、方向键、Tab 等）
-- 单二进制部署，前端静态资源嵌入，`systemd` 一条服务即可运行
+- 单二进制部署，前端静态资源嵌入，Linux `systemd` 或 macOS `launchd` 一条用户服务即可运行
 
 **非目标（本版本明确不做）**
 
 - 不做多机中心网关，每台机器各自部署、各自访问
-- 不做多用户 / 权限体系，以启动服务的 Linux 用户身份运行，单用户
+- 不做多用户 / 权限体系，以启动服务的系统用户身份运行，单用户
 - 不做服务进程重启后的会话存活（守护进程分离架构），重启即丢会话
 - 不做文件上传下载、分屏、推送通知；这些列为后续可选扩展
 - 不依赖系统 tmux，也不与已有 tmux 会话互通
@@ -35,10 +35,10 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 | 维度       | 决策                                              | 对实现的影响                                                |
 | ---------- | ------------------------------------------------- | ----------------------------------------------------------- |
 | 会话持久化 | 自研 PTY 管理器，不依赖 tmux                      | 服务进程内用 `creack/pty` fork 子进程，自己维护环形滚动缓冲 |
-| 部署形态   | 单机，每台 Linux 独立部署                         | 无主从、无注册中心，配置极简                                |
+| 部署形态   | 单机，每台 Linux / macOS 独立部署                 | 无主从、无注册中心，配置极简                                |
 | 网络与认证 | 走 Tailscale / WireGuard 内网                     | 默认只绑定内网地址；可选共享 token，无账号体系              |
 | 技术栈     | Go 单二进制，前端嵌入                             | `go:embed` 打包前端产物，`go build` 即得部署物              |
-| 运行身份   | 当前 Linux 用户，单用户                           | 不做 setuid / 用户切换，不做鉴权细粒度                      |
+| 运行身份   | 当前系统用户，单用户                              | 不做 setuid / 用户切换，不做鉴权细粒度                      |
 | 服务重启   | 会话随服务退出，仓库清单保留                      | 仅注册清单落盘；PTY、缓冲和会话列表仅在内存中               |
 | 欢迎页     | 仓库 → 主工作区 / worktree → 会话，两级折叠       | Git 快照与实时会话分离，直接目录启动不依赖 Git              |
 | 会话 title | 优先终端 OSC 0/2 设置的 title，没有则用工作目录名 | 服务端解析 PTY 输出流中的 OSC 序列                          |
@@ -48,7 +48,7 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 
 **约束与假设**
 
-- 目标系统为 Linux（amd64 / arm64），不考虑 Windows；macOS 作为开发环境可编译运行
+- 目标系统为 Linux 与 macOS（amd64 / arm64），不考虑 Windows
 - 同时存在的会话数量级为十几个，不做大规模优化
 - 单个浏览器标签可同时打开一个会话；同一会话允许多个浏览器同时附着（多端同看）
 - 滚动缓冲默认保留 10,000 行（可配置），超出后丢弃最旧行
@@ -116,12 +116,12 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 
 ### 3.4 状态判定规则（用户可见的定义）
 
-| 状态     | 判定                                                                                                                                                                          |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 运行中   | 最近 2 秒内有输出                                                                                                                                                             |
-| 等待输入 | 2 秒以上无输出，且前台进程处于读终端阻塞（`/proc/<pid>/wchan` 或 `stat` 显示 sleeping 且无子进程在跑），或输出末尾匹配提示符特征（行尾为 `$ `、`> `、`❯ `、`? `、`(y/n)` 等） |
-| 空闲     | 30 秒以上无输出且不满足“等待输入”特征                                                                                                                                         |
-| 已退出   | 子进程已退出，记录退出码                                                                                                                                                      |
+| 状态     | 判定                                                                                                                                                                                                           |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 运行中   | 最近 2 秒内有输出                                                                                                                                                                                              |
+| 等待输入 | 2 秒以上无输出，且前台进程树没有运行中的成员、叶子进程都在睡眠（Linux 读 `/proc/<pid>/stat`，macOS 读 `sysctl` 进程表与任务运行线程数），或输出末尾匹配提示符特征（行尾为 `$ `、`> `、`❯ `、`? `、`(y/n)` 等） |
+| 空闲     | 30 秒以上无输出且不满足“等待输入”特征                                                                                                                                                                          |
+| 已退出   | 子进程已退出，记录退出码                                                                                                                                                                                       |
 
 “等待输入”是 agent 场景最关心的状态：Claude Code 请求权限、问是否继续时都会停在这里。启发式可能误判，UI 文案用“可能在等你”而非断言。
 
@@ -245,7 +245,7 @@ else → waiting   // 2–30s 无输出且判断不出来，倾向提示用户�
 ```
 
 - `looksLikePrompt`：去除 ANSI 后的最后一行，去尾空格后以 `$`、`#`、`%`、`>`、`❯`、`›`、`?`、`:` 结尾，或包含 `(y/n)`、`[Y/n]`、`Yes`/`No` 选项、`Press Enter` 等模式；模式列表放在配置里可扩展
-- `foregroundBlockedOnRead`：读 `/proc/<pid>/stat` 的 state 字段，若整棵进程树（通过 `/proc/*/stat` 的 ppid 遍历）里没有 `R` 状态进程且叶子进程为 `S`，视为阻塞；非 Linux 平台此函数返回 false
+- `foregroundBlockedOnRead`：取每秒一次的进程表（Linux 为 `/proc/*/stat`，macOS 为 `sysctl kern.proc.all` 加 `proc_pidinfo` 的运行线程数），若整棵进程树（按 ppid 遍历）里没有 `R` 状态进程且叶子进程为 `S`，视为阻塞；其他平台此函数返回 false
 - 状态只是展示用，不驱动任何自动化动作，误判无害
 
 ### 5.6 lastLine 提取
@@ -527,13 +527,13 @@ web:            # 构建前端
 build: web      # 构建 Go 二进制，嵌入 web/dist
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/webmux ./cmd/webmux
 
-release:        # 交叉编译 linux/amd64 + linux/arm64
-	GOOS=linux GOARCH=amd64 ... && GOOS=linux GOARCH=arm64 ...
+release:        # 交叉编译 linux/amd64、linux/arm64、darwin/amd64、darwin/arm64
+	GOOS=linux GOARCH=amd64 ... && GOOS=linux GOARCH=arm64 ... && GOOS=darwin GOARCH=amd64 ... && GOOS=darwin GOARCH=arm64 ...
 ```
 
 `web/dist` 加入 `.gitignore`，仅跟踪 `.gitkeep`；`go:embed all:dist` 支持未构建时的 Go 检查，但此时页面返回 503。Vite 每次清空旧产物，`web/public/.gitkeep` 随静态资源复制，防止丢失占位文件或将旧前端打入二进制。
 
-### 8.4 部署（systemd 用户服务）
+### 8.4 部署（systemd / launchd 用户服务）
 
 ```ini
 # ~/.config/systemd/user/webmux.service
@@ -559,6 +559,8 @@ loginctl enable-linger $USER     # 让用户服务在未登录时也运行
 ```
 
 `Environment=PATH` 必须包含 `claude` / `codex` 的安装位置，否则预设命令找不到；文档里要明确提示用户检查 `which claude`。
+
+macOS 使用 launchd 用户代理 `deploy/com.webmux.plist`（`~/Library/LaunchAgents/`）：launchd 不展开 `~`，路径写绝对路径；`EnvironmentVariables` 同样要包含 agent 所在目录，并设置 `LANG` 为 UTF-8 locale；`ExitTimeOut` 给 WebMux 处理 SIGTERM、清理会话的时间。
 
 ### 8.5 手机访问
 
@@ -661,8 +663,8 @@ webmux/
    包括跨 chunk 拼接和缓冲回绕的用例。
 5. 所有 goroutine 必须能被 context 或 close(done) 干净地结束，用
    go test -race 跑测试。
-6. 任何 Linux 专有逻辑（/proc 读取）放在 _linux.go 文件里，其他平台给空实现，
-   保证 macOS 上 go build 通过。
+6. 平台相关的进程逻辑放在 _linux.go / _darwin.go 文件里（Linux 读 /proc，
+   macOS 用 sysctl 与 proc_pidinfo），其他平台给降级实现，保证都能 go build。
 7. 不要实现第 9.4 节列出的扩展功能。
 8. 遇到文档没写清楚的地方，先按最简单的实现做，并在汇报里列出你做的假设。
 

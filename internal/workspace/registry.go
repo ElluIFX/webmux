@@ -160,8 +160,8 @@ func (s *Service) save(entries []*repositoryState) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 	if err := f.Chmod(0600); err != nil {
 		return err
 	}

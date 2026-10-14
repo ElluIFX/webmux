@@ -3,19 +3,12 @@
 package session
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
-
-type processState struct {
-	ppid  int
-	state byte
-	sid   int
-	start uint64
-}
-type processTable map[int]processState
 
 // Read once per probe, not once per session. Commands may include spaces or ')'.
 func processes() processTable {
@@ -50,43 +43,19 @@ func processes() processTable {
 	}
 	return table
 }
-func foregroundBlocked(pid int, table processTable) bool {
-	root, ok := table[pid]
-	if !ok {
+
+// sessionMarked reports whether pid's environment contains the exact entry.
+func sessionMarked(pid int, marker []byte) bool {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
 		return false
 	}
-	if root.state == 'R' {
-		return false
+	for len(data) > 0 {
+		value, rest, _ := bytes.Cut(data, []byte{0})
+		if bytes.Equal(value, marker) {
+			return true
+		}
+		data = rest
 	}
-	tree := map[int]bool{pid: true}
-	for changed := true; changed; {
-		changed = false
-		for child, state := range table {
-			if !tree[child] && tree[state.ppid] {
-				tree[child] = true
-				changed = true
-			}
-		}
-	}
-	leaves := 0
-	for member := range tree {
-		state := table[member]
-		if state.state == 'R' {
-			return false
-		}
-		leaf := true
-		for child := range tree {
-			if table[child].ppid == member {
-				leaf = false
-				break
-			}
-		}
-		if leaf {
-			leaves++
-			if state.state != 'S' {
-				return false
-			}
-		}
-	}
-	return leaves > 0
+	return false
 }

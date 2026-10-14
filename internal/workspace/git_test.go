@@ -10,8 +10,9 @@ import (
 )
 
 func TestNULParsersPreservePathsAndRenameRecords(t *testing.T) {
-	path := "/tmp/path with spaces\nand newline"
-	trees, err := parseWorktrees([]byte("worktree "+path+"\x00HEAD abc123\x00branch refs/heads/main\x00future value\x00\x00worktree /tmp/linked\x00HEAD def456\x00detached\x00locked reason with\nnewline\x00\x00"), "repo")
+	// Absent roots keep the parser test free of host symlinks such as macOS /tmp.
+	path := "/webmux-absent/path with spaces\nand newline"
+	trees, err := parseWorktrees([]byte("worktree "+path+"\x00HEAD abc123\x00branch refs/heads/main\x00future value\x00\x00worktree /webmux-absent/linked\x00HEAD def456\x00detached\x00locked reason with\nnewline\x00\x00"), "repo")
 	if err != nil || len(trees) != 2 || trees[0].Path != path || !trees[1].Detached || trees[1].LockReason != "reason with\nnewline" {
 		t.Fatalf("NUL parser: %+v %v", trees, err)
 	}

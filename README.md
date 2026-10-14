@@ -2,11 +2,11 @@
 
 单用户、单进程、可重连的 Web 终端。浏览器关闭、切网不会结束服务端 PTY；重新附着会清屏并回放当前缓冲。用于在可信内网中操作 Bash、Claude Code、Codex CLI 等。目标与协议见 [WebMux.md](WebMux.md)。
 
-**安全边界：这相当于以当前 Linux 用户身份把 shell 暴露到网络。不要开放公网；默认只绑定 `127.0.0.1:7681`。使用 Tailscale / WireGuard 地址并设置共享 token。服务重启结束所有会话，PTY 与缓冲不落盘；仅显式添加的仓库清单持久保存。**
+**安全边界：这相当于以当前系统用户身份把 shell 暴露到网络。不要开放公网；默认只绑定 `127.0.0.1:7681`。使用 Tailscale / WireGuard 地址并设置共享 token。服务重启结束所有会话，PTY 与缓冲不落盘；仅显式添加的仓库清单持久保存。**
 
 ## 从源码构建
 
-需要 Go **1.23+**（websocket 依赖的最低版本）、Node.js **24 LTS**、pnpm **12.11.2** 和 GNU Make。运行端只需 Linux amd64 / arm64、可执行 shell 与所选 agent；不需要 Node.js、Go 或 tmux。
+需要 Go **1.23+**（websocket 依赖的最低版本）、Node.js **24 LTS**、pnpm **12.11.2** 和 GNU Make（macOS 自带的 `make` 即 GNU Make）。运行端只需 Linux 或 macOS（amd64 / arm64）、可执行 shell 与所选 agent；不需要 Node.js、Go 或 tmux。
 
 Git 是仓库 / worktree 管理的可选系统依赖（需要支持 `git worktree list --porcelain -z`）。没有 Git 时仍可直接启动终端；添加的仓库必须可信，Git 的本机配置、hooks 与 filters 不在沙箱内运行。
 
@@ -22,14 +22,14 @@ make build
 
 - `make web`：构建前端到 `web/dist`。
 - `make build`：构建内嵌静态资源的单二进制 `bin/webmux`。
-- `make release VERSION=0.1.0`：生成 `bin/webmux-linux-amd64`、`bin/webmux-linux-arm64`，CGO 禁用。
+- `make release VERSION=0.1.0`：生成 `bin/webmux-linux-amd64`、`bin/webmux-linux-arm64`、`bin/webmux-darwin-amd64`、`bin/webmux-darwin-arm64`，CGO 禁用；darwin/arm64 由 Go 链接器自动 ad-hoc 签名。
 - `make install`：构建并安装到 `~/.local/bin/webmux`。
 - `make test`：Go race 测试、Vitest 单元 / Chromium 组件测试与 Playwright 真实后端端到端测试。
 - `make check`：Svelte / TypeScript 检查、Vite 构建、格式检查、`go vet`、golangci-lint 默认规则。需先将 `golangci-lint` 放到 PATH。
 - `make format`：gofmt 格式化所有 Go 文件，Prettier 格式化前端代码、配置与文档。
 - `make format-check`：检查格式，不修改文件；构建产物和依赖目录除外。
 
-macOS 可编译运行，`/proc` 探测在非 Linux 平台返回 false；发布目标为 Linux。未构建前端时 `.gitkeep` 让 `go test` 能工作，但该状态的 HTTP 页面明确返回 503，不能当作可部署产品。
+Linux 与 macOS 是同等支持的运行平台。进程状态与清理在 Linux 读 `/proc`，在 macOS 读 `sysctl kern.proc.all` 与 `proc_pidinfo` 的运行线程数；其他平台只能编译，进程探测返回 false、关闭时只信号进程组。未构建前端时 `.gitkeep` 让 `go test` 能工作，但该状态的 HTTP 页面明确返回 503，不能当作可部署产品。
 
 ## 配置
 
@@ -93,6 +93,34 @@ Environment=PATH=/home/YOU/.local/bin:/home/YOU/.nvm/versions/node/v24.20.0/bin:
 
 重载并重启服务。用户未登录时仍需运行，可执行 `loginctl enable-linger "$USER"`（可能需要管理员授权）。服务使用 `KillMode=mixed`，先让 WebMux 正常清理会话，再由 systemd 在超时后清理整个 cgroup。终止 / 重启服务会永久丢失会话与缓冲。
 
+## macOS launchd 用户代理
+
+```sh
+make install
+mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+sed "s#/Users/YOU#$HOME#g" deploy/com.webmux.plist > ~/Library/LaunchAgents/com.webmux.plist
+plutil -lint ~/Library/LaunchAgents/com.webmux.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.webmux.plist
+launchctl print "gui/$(id -u)/com.webmux"
+tail -f ~/Library/Logs/webmux.log
+```
+
+先按「配置」创建配置。launchd 不展开 `~` 与 `$HOME`，模板里的 `/Users/YOU` 必须替换为真实主目录。`EnvironmentVariables` 的 PATH 已包含 `~/.local/bin`、pnpm / npm 全局 bin 与 Homebrew；agent 在其他目录时直接编辑 plist 后重新加载：
+
+```sh
+launchctl bootout "gui/$(id -u)/com.webmux"
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.webmux.plist
+```
+
+代理在登录后运行（用户会话内，非开机前），`RunAtLoad` 启动、异常退出后 `KeepAlive` 重启。plist 设置 `SHELL=/bin/zsh` 与 `LANG=en_US.UTF-8`：launchd 不加载登录 shell 环境，缺少 UTF-8 locale 时中文会显示为转义。`ExitTimeOut` 15 秒内 WebMux 收到 SIGTERM 后清理会话，超时由 launchd SIGKILL。停止 / 重载代理会永久丢失会话与缓冲。系统睡眠会暂停所有会话进程；需要长时间运行 agent 时用「系统设置 → 电池」或 `caffeinate` 防止睡眠。
+
+macOS 平台差异：
+
+- 没有 subreaper；脱离父进程的后代由 launchd 回收，不会成为 WebMux 的僵尸进程。
+- 内核不向其他进程公开环境变量（即使同一用户），`WEBMUX_SESSION_ID` 只能用于 Linux。关闭会话时按终端会话 ID 与进程树查找后代；先 `setsid` 脱离终端会话、再让父进程退出的自守护程序不会被清理。
+- 临时目录位于 `/var → /private/var` 符号链接之下；会话与工作树报告规范化后的真实路径。
+- Apple 的 `/bin/bash` 是 3.2，交互启动时提示改用 zsh，可设置 `BASH_SILENCE_DEPRECATION_WARNING=1`。默认 shell 预设使用 `$SHELL`（通常为 `/bin/zsh`）。
+
 ## Tailscale 与手机访问
 
 1. 在服务器和手机安装 Tailscale，加入同一可信网络。
@@ -147,10 +175,10 @@ HTTP 私网通常无法读 Clipboard API：点“粘贴”后在输入框粘贴�
 
 ### 标题与状态
 
-OSC 0/2 title 支持 BEL / ST 与跨块拼接，创建时的手动名称优先。预览去除增量 ANSI / OSC 序列，最多 120 字符，不是完整终端仿真。Linux 进程表每秒刷新，时间与提示符状态每 500 ms 评估，为 3 秒等待提示留出传输余量；列表更新每会话最多 500 ms 一次，预览变化最多 2 秒一次。
+OSC 0/2 title 支持 BEL / ST 与跨块拼接，创建时的手动名称优先。预览去除增量 ANSI / OSC 序列，最多 120 字符，不是完整终端仿真。进程表（Linux `/proc`、macOS `sysctl`）每秒刷新，时间与提示符状态每 500 ms 评估，为 3 秒等待提示留出传输余量；列表更新每会话最多 500 ms 一次，预览变化最多 2 秒一次。
 
 - 最近 2 秒有输出：运行中。
-- 之后匹配提示符，或 Linux 进程树无 running 成员、叶子全 sleeping：可能在等你。
+- 之后匹配提示符，或进程树无 running 成员、叶子全 sleeping（Linux / macOS）：可能在等你。
 - 2–30 秒不确定：同样提示查看；超过空闲阈值且没有等待特征：空闲。
 - 子进程结束：已退出，记录真实退出码；信号退出记为 `128 + signal`。
 
@@ -164,7 +192,7 @@ REST 与二进制 WebSocket 帧遵循设计文档第 6 节。只读 `GET /api/co
 
 会话创建可附加 `workspace: {repositoryId, worktreeId}`；省略 cwd 使用该工作树根目录，提供 cwd 时必须属于同一工作树（允许子目录），失效目标不会退回默认目录。`SessionInfo.workspace` 返回可空 `{repositoryId, worktreeId, worktreePath}`，`cwd` 仍为真实启动目录。仓库相关路由、删除预览与单次确认合同见 [协议 6.1](WebMux.md#61-http-api)，终端二进制帧不变。
 
-Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照与订阅在同一锁内切换，无回放缺口；慢客户端断开后可重连。PTY 使用 Go netpoll 支持的非阻塞描述符，断开连接能取消阻塞输入，不会关闭持久会话；每连接输入队列有上限，单次写入最长 10 秒。会话退出先清理子进程并排空 PTY，再发送退出帧。关闭先 SIGHUP，5 秒后 SIGKILL；Linux 按会话 ID、进程树与继承的 WEBMUX_SESSION_ID 找到其他 job-control 进程组，并用 subreaper 回收孤儿子进程，不因主进程先退出而取消清理。显式清掉环境再完全脱离会话的自守护程序不属于可靠可控的 PTY 子进程；本服务不是进程沙箱。不会把终端输入输出写入日志。
+Session 持有 PTY 与有界字节环形缓冲，连接只是观察者。快照与订阅在同一锁内切换，无回放缺口；慢客户端断开后可重连。PTY 使用 Go netpoll 支持的非阻塞描述符，断开连接能取消阻塞输入，不会关闭持久会话；每连接输入队列有上限，单次写入最长 10 秒。会话退出先清理子进程并排空 PTY，再发送退出帧。关闭先 SIGHUP，5 秒后 SIGKILL；Linux 与 macOS 按会话 ID 与进程树找到其他 job-control 进程组，Linux 另按继承的 WEBMUX_SESSION_ID 查找并用 subreaper 回收孤儿子进程，macOS 由 launchd 回收孤儿；不因主进程先退出而取消清理。完全脱离终端会话且父进程已退出的自守护程序（Linux 上还需显式清掉环境）不属于可靠可控的 PTY 子进程；本服务不是进程沙箱。不会把终端输入输出写入日志。
 
 输入在等待写入锁之前和获得锁之后都检查取消状态，避免已经断开的连接仍把排队输入写进 PTY。Origin 必须是完整的 HTTP(S) origin，不接受缺失主机、路径、query 或 fragment；API 不接受 query token。
 
@@ -191,7 +219,7 @@ make format
 make check
 ```
 
-首次安装依赖后执行 `make test-browsers-install`（安装 Chromium 和 Linux 系统依赖；系统依赖可能需要 sudo）。已有系统库时可只执行 `pnpm --dir web exec playwright install chromium`。`make test-unit`、`make test-browser`、`make test-e2e` 分别运行三个测试层。
+首次安装依赖后执行 `make test-browsers-install`（安装 Chromium；Linux 上同时安装系统依赖，可能需要 sudo，macOS 无需额外系统库）。已有系统库时可只执行 `pnpm --dir web exec playwright install chromium`。`make test-unit`、`make test-browser`、`make test-e2e` 分别运行三个测试层。
 
 - **Vitest 单元测试**：Node 环境，覆盖 Ctrl / Alt 控制字节、组合顺序与 Unicode / 多字符输入边界。
 - **Vitest 浏览器组件测试**：真实 Svelte / Tailwind / xterm 渲染，不需要后端。覆盖目录选择器导航 / 滚动 / 错误恢复、WebGL 与 DOM 渲染回退、DPR、历史保留、触控滚动 / 缩放 / 取消、暗色对比度与中文长按扩选。
@@ -199,7 +227,7 @@ make check
 
 - **Worktree 验收**：`web/test/e2e/worktrees.spec.ts` 在临时真实 Git 仓库与状态目录中验证两工作树、多 PTY / 回放、dirty / ignored 保护、强制删除与分支保留、启动失败重试、移除登记、跨重启恢复清单、无 Git 直接启动、陈旧确认和旧响应竞态。后端 race 测试另覆盖存储失败 / 锁、NUL 路径、并发启动 / 删除、身份变化、关闭超时及子进程回收。
 
-GitHub Actions 自动安装依赖和浏览器，运行构建及全部测试；失败保留截图、trace、video、服务日志与 PTY 缓冲，报告位于 `web/playwright-report`，附件位于 `web/test-results`。移动模拟不能替代 iOS Safari / Android 系统原生选择菜单与键盘的真机验证。
+GitHub Actions 在 Ubuntu 与 macOS 上分别自动安装依赖和浏览器，运行构建及全部测试；失败保留截图、trace、video、服务日志与 PTY 缓冲，报告位于 `web/playwright-report`，附件位于 `web/test-results`。移动模拟不能替代 iOS Safari / Android 系统原生选择菜单与键盘的真机验证。
 
 Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被拒绝。生产不需要开发 Origin。
 
@@ -231,7 +259,7 @@ core 包含 explore、propose、apply、update、sync、archive 六个工作流�
 
 ## FAQ
 
-**创建失败，找不到 claude / codex？** 检查服务用户的 PATH；systemd 不会执行你的交互 shell 初始化文件。预设显示实际 argv，程序缺失不会被误报为目录不存在。
+**创建失败，找不到 claude / codex？** 检查服务用户的 PATH；systemd 与 launchd 都不会执行你的交互 shell 初始化文件。预设显示实际 argv，程序缺失不会被误报为目录不存在。
 
 **断线后旧内容有一点乱码？** 字节环形缓冲可能从 UTF-8 / 转义序列中间开始。前端全量重放，首行偶发残片在设计允许范围内。
 
@@ -249,25 +277,38 @@ core 包含 explore、propose、apply、update、sync、archive 六个工作流�
 
 以下为本次实际运行结果，不把模拟浏览器视为真机验收。
 
-| 项目             | 验证结果                                                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Go 检查          | `go test -race ./...`、`go vet ./...`、`golangci-lint run ./...` 通过，lint 0 issues                                                  |
-| 前端与格式       | Svelte / TypeScript 0 errors、0 warnings；Vite 构建无警告；控制键测试、`make format-check` 通过                                       |
-| pnpm 与打包      | frozen lockfile 安装、`make build`、`make release` 通过；JS + CSS 合计约 255 kB gzip                                                  |
-| HTTP / WebSocket | 真实服务验证 token / Origin、创建、输入、resize、双客户端、回放、退出码与移除                                                         |
-| 持久会话         | 零客户端持续 610.026 秒，重连快照完整包含 60 轮 `claude --version` 真实输出及结束标记；随后浏览器实际接收全部 60 轮并显示回放         |
-| 状态与标题       | OSC 标题、预览更新通过；测试提示符 2048 ms、真实 Claude 目录权限确认 2283 ms 收到 waiting 事件                                        |
-| 进程清理         | 实际 Bash、Claude 和忽略 HUP 的 sleep 子进程，5128 ms 内全部退出，`ps` 确认无残留                                                     |
-| 内存上限         | 20 个运行中会话，每个缓冲填满 2 MiB，服务 RSS 75.9 MiB                                                                                |
-| 桌面 UI          | Token 登录、创建目录、创建会话、终端输入、卡片菜单、关闭确认、保留退出输出、移除通过                                                  |
-| 移动视口 UI      | 390px Chromium：Drawer、目录补全、预设参数、中文多行粘贴、粘滞键、捏合与字体持久化通过；844×390 横屏自动 resize 到 102×13，无横向溢出 |
-| 真实 Claude TUI  | 方向键切换 No / Yes，Esc 正常取消；Ctrl+C 提示再次按键后退出，退出码 1                                                                |
-| 前台恢复         | Chromium 触发 visibilitychange 后 4 ms 收到真实 WebSocket 快照，历史输出保留；非真实手机锁屏                                          |
-| Zod              | 实际 HTTP 响应通过解析；畸形会话事件被拒绝；损坏目录列表被拒绝，损坏字体设置回退                                                      |
-| 跨平台           | Linux amd64 / arm64 静态二进制、macOS amd64 / arm64 编译通过；未在 arm64 / macOS 硬件运行                                             |
-| 干净 Linux       | Debian bookworm-slim 仅挂载发布二进制，无 Node / Go，验证内嵌 SPA、认证、真实 Bash PTY、输出与退出码                                  |
-| systemd          | `systemd-analyze --user verify deploy/webmux.service` 通过；未替换当前用户的常驻服务                                                  |
+| 项目             | 验证结果                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Go 检查          | `go test -race ./...`、`go vet ./...`、`golangci-lint run ./...` 通过，lint 0 issues                                                                    |
+| 前端与格式       | Svelte / TypeScript 0 errors、0 warnings；Vite 构建仅有 chunk 体积提示（见 macOS 验收）；控制键测试、`make format-check` 通过                           |
+| pnpm 与打包      | frozen lockfile 安装、`make build`、`make release` 通过；JS + CSS 合计约 255 kB gzip                                                                    |
+| HTTP / WebSocket | 真实服务验证 token / Origin、创建、输入、resize、双客户端、回放、退出码与移除                                                                           |
+| 持久会话         | 零客户端持续 610.026 秒，重连快照完整包含 60 轮 `claude --version` 真实输出及结束标记；随后浏览器实际接收全部 60 轮并显示回放                           |
+| 状态与标题       | OSC 标题、预览更新通过；测试提示符 2048 ms、真实 Claude 目录权限确认 2283 ms 收到 waiting 事件                                                          |
+| 进程清理         | 实际 Bash、Claude 和忽略 HUP 的 sleep 子进程，5128 ms 内全部退出，`ps` 确认无残留                                                                       |
+| 内存上限         | 20 个运行中会话，每个缓冲填满 2 MiB，服务 RSS 75.9 MiB                                                                                                  |
+| 桌面 UI          | Token 登录、创建目录、创建会话、终端输入、卡片菜单、关闭确认、保留退出输出、移除通过                                                                    |
+| 移动视口 UI      | 390px Chromium：Drawer、目录补全、预设参数、中文多行粘贴、粘滞键、捏合与字体持久化通过；844×390 横屏自动 resize 到 102×13，无横向溢出                   |
+| 真实 Claude TUI  | 方向键切换 No / Yes，Esc 正常取消；Ctrl+C 提示再次按键后退出，退出码 1                                                                                  |
+| 前台恢复         | Chromium 触发 visibilitychange 后 4 ms 收到真实 WebSocket 快照，历史输出保留；非真实手机锁屏                                                            |
+| Zod              | 实际 HTTP 响应通过解析；畸形会话事件被拒绝；损坏目录列表被拒绝，损坏字体设置回退                                                                        |
+| 跨平台           | `make release` 生成 Linux / macOS amd64 / arm64 静态二进制；darwin-arm64 原生、darwin-amd64 经 Rosetta、linux-arm64 在 Debian 容器中运行 `version` 通过 |
+| 干净 Linux       | Debian bookworm-slim 仅挂载发布二进制，无 Node / Go，验证内嵌 SPA、认证、真实 Bash PTY、输出与退出码                                                    |
+| systemd          | `systemd-analyze --user verify deploy/webmux.service` 通过；未替换当前用户的常驻服务                                                                    |
 
 **仍需真机环境**：iOS Safari / Android Chrome 的中文输入法、`--help` 自动替换行为、VPN 切换、系统键盘与锁屏解锁后 3 秒恢复；当前只确认了输入属性、视口处理和浏览器恢复机制。没有连接真实移动设备，不将这些条目标记为已通过。4G 首屏 1 秒目标也未在真实蜂窝网络测量。
 
 Chrome 移动设备模拟器可能报告与 DPR 不一致的 `device-pixel-content-box` 尺寸，导致 WebGL 画布空白；现在会自动切换 DOM 渲染器。已在 412×924、DPR 2.625 的 Chromium 模拟中，通过现有真实 omp 会话观察到 logo、更新提示与终端提示符正常显示。该验证不代替实际 iOS GPU / Safari 真机验证。
+
+### macOS 验收（2026-10-14，macOS 26.7.1 arm64）
+
+| 项目            | 验证结果                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Go 检查         | `make test` 中 `go test -race ./...` 全部通过；`internal/session` 另以 darwin/amd64（Rosetta）通过；`make check` 通过，`golangci-lint` 在 darwin 与 `GOOS=linux` 下均 0 issues |
+| Linux 回归      | `golang:1.23-bookworm` 容器内 `go vet ./...`、`go test -race ./...` 全部通过，含仅 Linux 的 subreaper 回收测试                                                                 |
+| 前端与 E2E      | Vitest 单元 22 / 浏览器 21 通过；Playwright 桌面 + Pixel 7 共 25 通过、3 个仅移动端用例在桌面项目按设计跳过                                                                    |
+| 打包与安装      | `make build`、`make release`、`make install HOME=<临时目录>`（BSD `install`）通过；darwin-arm64 `codesign -v` 通过                                                             |
+| 真实服务        | 默认 shell 预设为 `/bin/zsh -l -i`；空闲阈值 3 秒时，`read` 阻塞的 Bash 判为 waiting，忙循环判为 idle；cwd 报告规范化真实路径                                                  |
+| 进程清理        | 独立 job-control 组中忽略 HUP 的 `sleep` 在关闭后 5106 ms 退出（退出码 137），`ps` 无残留；适配前 macOS 只信号进程组，worktree 强制删除测试报告子进程存活                      |
+| launchd         | `plutil -lint` 通过；以临时标签 `bootstrap` 模板后健康检查、zsh 会话与 `LANG` / `SHELL` 生效，`bootout` 后服务与会话进程全部退出；未替换当前用户的常驻代理                     |
+| 已知差异 / 警告 | macOS 不公开其他进程环境，`WEBMUX_SESSION_ID` 无法用于清理（见 macOS 平台差异）；Vite 构建提示 `index` chunk（509 kB）超过 500 kB，与平台无关                                  |

@@ -15,6 +15,8 @@ build: web
 release: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-linux-amd64 ./cmd/webmux
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-linux-arm64 ./cmd/webmux
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-darwin-amd64 ./cmd/webmux
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-darwin-arm64 ./cmd/webmux
 
 check: web format-check
 	$(GO) vet ./...
@@ -46,4 +48,5 @@ format-check:
 	$(PNPM) --dir web exec prettier --check --ignore-path ../.prettierignore ../README.md ../WebMux.md ../.prettierrc.json .
 
 install: build
-	install -Dm755 bin/webmux $(HOME)/.local/bin/webmux
+	install -d $(HOME)/.local/bin
+	install -m 755 bin/webmux $(HOME)/.local/bin/webmux

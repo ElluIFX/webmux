@@ -133,7 +133,7 @@ func parseWorktrees(data []byte, repository string) ([]Worktree, error) {
 		key, value, _ := strings.Cut(field, " ")
 		if key == "worktree" {
 			if !filepath.IsAbs(value) {
-				return nil, errors.New("Git 返回非绝对工作树路径")
+				return nil, errors.New("工作树路径不是绝对路径（来自 Git）")
 			}
 			path, err := canonicalTarget(value)
 			if err != nil {
@@ -148,7 +148,7 @@ func parseWorktrees(data []byte, repository string) ([]Worktree, error) {
 			continue
 		}
 		if current == nil {
-			return nil, errors.New("Git 工作树记录缺少路径")
+			return nil, errors.New("工作树记录缺少路径（来自 Git）")
 		}
 		switch key {
 		case "HEAD":
@@ -175,14 +175,14 @@ func parseStatus(data []byte) (dirty, untracked, ignored bool, err error) {
 		return
 	}
 	if data[len(data)-1] != 0 {
-		err = errors.New("Git 状态输出不是 NUL 格式")
+		err = errors.New("状态输出不是 NUL 格式（来自 Git）")
 		return
 	}
 	records := bytes.Split(data[:len(data)-1], []byte{0})
 	for i := 0; i < len(records); i++ {
 		record := records[i]
 		if len(record) < 4 || record[2] != ' ' {
-			err = errors.New("Git 状态记录无效")
+			err = errors.New("状态记录无效（来自 Git）")
 			return
 		}
 		switch string(record[:2]) {
@@ -195,7 +195,7 @@ func parseStatus(data []byte) (dirty, untracked, ignored bool, err error) {
 			if record[0] == 'R' || record[0] == 'C' || record[1] == 'R' || record[1] == 'C' {
 				i++
 				if i >= len(records) {
-					err = errors.New("Git 重命名状态记录不完整")
+					err = errors.New("重命名状态记录不完整（来自 Git）")
 					return
 				}
 			}

@@ -100,7 +100,7 @@ func TestWorkspaceDegradedServerProcess(t *testing.T) {
 				Workspace workspace.Capability `json:"workspace"`
 			}
 			err = json.NewDecoder(response.Body).Decode(&settings)
-			response.Body.Close()
+			_ = response.Body.Close()
 			if err != nil || settings.Workspace.GitAvailable || settings.Workspace.RegistryAvailable == brokenState {
 				t.Fatalf("degraded capability: %+v %v", settings, err)
 			}
@@ -110,7 +110,7 @@ func TestWorkspaceDegradedServerProcess(t *testing.T) {
 			}
 			var info session.Info
 			err = json.NewDecoder(response.Body).Decode(&info)
-			response.Body.Close()
+			_ = response.Body.Close()
 			if err != nil || response.StatusCode != 201 || info.Cwd != dir || info.Workspace != nil {
 				t.Fatalf("real degraded launch: status %d info %+v err %v", response.StatusCode, info, err)
 			}
