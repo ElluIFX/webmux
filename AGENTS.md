@@ -1,0 +1,88 @@
+# Repository Guidelines
+
+## Project Overview
+
+WebMux is a single-user Linux web terminal for persistent PTY sessions, including shells and CLI agents. Browser disconnection does not end a session; server restart does. The Go binary embeds the browser app. This is not a process sandbox, durable session store, or tmux wrapper: commands run as the service user. Keep deployments on loopback or a trusted VPN; do not expose an unrestricted shell publicly.
+
+## Architecture & Data Flow
+
+- Startup loads TOML configuration, converts it to `session.Options`, constructs a `session.Manager`, and injects configuration and manager into `api.New`. Keep this explicit constructor-based dependency wiring.
+- `internal/session` owns PTYs, bounded byte scrollback, metadata, status detection, and process cleanup. `internal/api` owns REST routes, authentication, Origin checks, and static serving; `internal/hub` bridges session subscriptions to WebSockets.
+- REST handles configuration, session operations, and filesystem requests. `/ws/sessions` delivers a snapshot followed by list events; `/ws/s/{id}` carries terminal frames. Raw PTY bytes reach xterm without server-side terminal emulation; OSC/title and preview parsing are side channels.
+- Replay capture and live subscription registration share a lock: preserve gap-free reattachment. Bounded queues disconnect slow clients rather than blocking PTY readers. Each connection has one data writer; cancellation must stop connection work without killing the persistent session.
+- Backend payloads and `web/src/schemas.ts` form one contract. Keep frame handling in `internal/hub` and `web/src/hooks/terminal.svelte.ts` aligned; update schemas and consumers together when changing JSON fields.
+
+## Key Directories
+
+| Path                                                 | Change guidance                                                                                                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `cmd/webmux/`                                        | CLI flags, dependency wiring, and server shutdown.                                                                    |
+| `internal/session/`                                  | Session lifecycle and concurrency; Linux process cleanup has platform-specific files.                                 |
+| `internal/api/`, `internal/hub/`, `internal/config/` | HTTP/security boundaries, streaming transport, and configuration validation.                                          |
+| `web/src/pages/`, `web/src/hooks/`                   | Page state and resource-owning terminal/mobile behavior.                                                              |
+| `web/src/lib/components/ui/`                         | shadcn-svelte base components; compose them in business components instead of inventing replacement dialogs or menus. |
+| `web/test/`                                          | Node unit, browser component, and isolated backend E2E suites.                                                        |
+| `deploy/`, `openspec/`                               | Deployment examples and specification workflow artifacts.                                                             |
+
+`web/dist/`, `bin/`, and browser reports are generated outputs. `acceptance.local/` is gitignored, machine-specific experimentation with fixed ports/tokens and live-session side effects—not the standard QA suite.
+
+## Development Commands
+
+Run from the repository root:
+
+| Command                                    | Purpose                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------- |
+| `pnpm --dir web install --frozen-lockfile` | Install locked frontend dependencies.                                     |
+| `make web`                                 | Install dependencies, run Svelte/TypeScript checks, and build `web/dist`. |
+| `make build`                               | Build frontend first, then the embedded Go executable `bin/webmux`.       |
+| `make release`                             | Build Linux amd64 and arm64 binaries.                                     |
+| `./bin/webmux --listen 127.0.0.1:7681`     | Run the backend and embedded production app.                              |
+| `pnpm --dir web dev`                       | Run Vite at `http://127.0.0.1:5173`.                                      |
+| `pnpm --dir web check`                     | Check Svelte/TypeScript without building.                                 |
+| `make check`                               | Build frontend, check formatting, run `go vet` and `golangci-lint`.       |
+| `make format` / `make format-check`        | Apply/check gofmt and Prettier on configured targets.                     |
+
+Vite proxies `/api` and `/ws` to backend port 7681. Run the backend separately and add `allowed_origins = ["http://127.0.0.1:5173"]` to its development TOML; otherwise browser write requests are rejected. Configuration defaults to `~/.config/webmux/config.toml`; `-config`, `-listen`, and `-token` override startup settings.
+
+## Code Conventions & Common Patterns
+
+- Go uses gofmt. Frontend files use Prettier with two spaces, semicolons, trailing commas, and the Svelte plugin. TypeScript is strict; `$lib` aliases `web/src/lib`.
+- Follow existing names: PascalCase Svelte components, camelCase TypeScript functions, `*Schema` Zod contracts, `*.svelte.ts` rune-bearing hooks, Go `*_test.go`, and Playwright `*.spec.ts`.
+- Use Svelte 5 `$state`/`$derived` for local reactive state and lifecycle cleanup for sockets, xterm, listeners, and observers. Reuse `api.ts` and `ws.ts`; do not add parallel request or reconnect conventions.
+- Validate HTTP responses, WebSocket JSON, and local settings with Zod before updating state; derive types with `z.infer`. PTY data stays binary, not JSON or decoded text.
+- Return contextual Go errors and API JSON errors with meaningful HTTP statuses. Frontend failures use `APIError`; HTTP 401 triggers `webmux:auth`. Preserve cancellation/deadlines for PTY writes and join spawned connection goroutines.
+- Protect manager/session state with existing locks; do not hold them across blocking network or PTY operations. Shared output chunks stay immutable. Exit publication follows PTY drain and process cleanup.
+- Execute commands as argv, not shell-expanded strings. Preset creation and `preset: "custom"` command creation are mutually exclusive contracts. Preserve authentication and Origin checks on API/WebSocket paths; never log terminal input/output or expose tokens through configuration responses.
+
+## Important Files
+
+- `cmd/webmux/main.go`, `web/src/main.ts`, `web/src/App.svelte`: server/browser entry points and top-level lifecycle/routing.
+- `internal/session/manager.go`, `session.go`, `io.go`, `ring.go`: state ownership, PTY lifecycle, cancellable input, and replay.
+- `web/embed.go`: embeds `web/dist`; rebuild the frontend before compiling Go to avoid missing or stale assets.
+- `Makefile`, `go.mod`, `web/package.json`, `web/pnpm-lock.yaml`, `web/pnpm-workspace.yaml`: build commands, tool/dependency versions, and permitted install scripts.
+- `web/vite.config.ts`, `web/tsconfig.json`, `web/components.json`, `.prettierrc.json`: proxy/alias, strict typing, UI generation, and formatting configuration.
+- `README.md`: practical setup, security, development, and deployment guidance. `WebMux.md`: product behavior and protocol design; confirm implementation details against source. `deploy/config.example.toml` and `deploy/webmux.service`: TOML and systemd examples.
+- `openspec/config.yaml`: spec-driven workflow context. Write new specification artifacts in Simplified Chinese, retaining English structural headings and SHALL/MUST keywords. `.agents/`, `.claude/`, and `.omp/` contain generated workflow integrations; preserve the canonical README/design docs.
+
+## Runtime/Tooling Preferences
+
+Use Go 1.23+, Node.js 24 LTS, pnpm 12.11.2, and GNU Make. Use pnpm—not npm, Yarn, or Bun—to manage frontend dependencies; retain the frozen lockfile workflow and the `esbuild`-only dependency build-script allowlist.
+
+Production needs only the Linux binary, a shell, and any chosen CLI agents; it does not require Node or Go. Release builds use `CGO_ENABLED=0`. `make check` needs a separately installed `golangci-lint`; current CI does not run that lint target. OpenSpec 1.13.0 is optional workflow tooling, not a frontend runtime dependency.
+
+## Testing & QA
+
+```sh
+make test                         # Go race tests + all frontend suites
+make test-unit                    # Vitest in Node
+make test-browser                 # Vitest in headless Chromium
+make test-e2e                     # Playwright: desktop + Pixel 7 Chromium
+make test-browsers-install        # Chromium + Linux libraries; may require sudo
+```
+
+- Go tests use the standard `testing` package. Target a package with `go test -race ./internal/session`; Linux lifecycle tests cover child-process cleanup, reaping, and input cancellation.
+- Browser tests exercise real Svelte/Tailwind/xterm rendering without a backend. E2E uses a real Go backend and Vite with temporary HOME/config/workdirs and dynamic ports, one worker, and automatic session/process cleanup. Do not connect tests to an existing developer service.
+- Target a frontend test with `pnpm --dir web exec vitest run --config vitest.config.ts test/input.test.ts`, or an E2E spec with `pnpm --dir web exec playwright test test/e2e/terminal.spec.ts`.
+- Preserve behavioral coverage for authentication/Origin rejection, argv boundaries, replay continuity, exit ordering, cancellation, terminal input/rendering, and touch interactions. No numeric coverage threshold is configured.
+- `.github/workflows/test.yml` builds frontend, checks formatting, and runs all suites on Ubuntu. Failure diagnostics live in `web/playwright-report/`, `web/test-results/`, and `web/.vitest/attachments/`; open the E2E HTML report with `pnpm --dir web test:e2e:report`.
+- Chromium mobile emulation does not replace real-device iOS Safari/Android keyboard and native selection-menu checks.
