@@ -67,7 +67,7 @@ const branches = {
   defaultParent: "/repos/project.worktrees",
 };
 
-function serve(status = 200) {
+function serve(status = 200, response = branches) {
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>(async (input) => {
@@ -78,7 +78,7 @@ function serve(status = 200) {
       if (status !== 200) {
         return Response.json({ error: "无法读取分支" }, { status });
       }
-      return Response.json(branches);
+      return Response.json(response);
     }),
   );
 }
@@ -147,9 +147,7 @@ test("mode switch regenerates a new branch and a failed list stays empty", async
     .toMatch(/^wt\/[a-z]+-[a-z]+$/);
 
   await page.getByRole("button", { name: "使用已有分支", exact: true }).click();
-  await expect
-    .element(page.getByRole("combobox", { name: "已有本地分支" }))
-    .toHaveValue("");
+  await expect.element(ready()).toHaveTextContent("not-ready");
   await page.getByRole("button", { name: "创建新分支", exact: true }).click();
   await expect
     .poll(() => branchInput().element().value)
@@ -165,4 +163,54 @@ test("mode switch regenerates a new branch and a failed list stays empty", async
   await expect
     .element(page.getByRole("button", { name: "换一个", exact: true }))
     .toBeDisabled();
+});
+
+test("search selects the literal branch and ignores occupied matches without losing the choice", async () => {
+  serve(200, {
+    ...branches,
+    branches: [
+      ...branches.branches,
+      { name: "feature/branch-024", head, worktreePaths: [] },
+      { name: "feature/branch-042", head, worktreePaths: [] },
+    ],
+  });
+  render(Harness, { repository });
+  await page.getByRole("button", { name: "使用已有分支", exact: true }).click();
+  const search = page.getByRole("combobox", {
+    name: "已有本地分支",
+    exact: true,
+  });
+  await expect.element(search).toBeEnabled();
+  await search.fill("BRANCH-042");
+  await expect
+    .element(
+      page.getByRole("option", { name: "feature/branch-042", exact: true }),
+    )
+    .toBeVisible();
+  await expect
+    .element(
+      page.getByRole("option", { name: "feature/branch-024", exact: true }),
+    )
+    .not.toBeInTheDocument();
+  await expect.element(ready()).toHaveTextContent("not-ready");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(pathInput())
+    .toHaveValue("/repos/project.worktrees/branch-042");
+  await expect.element(ready()).toHaveTextContent("ready");
+
+  await search.fill("main");
+  await expect
+    .element(page.getByRole("option", { name: /main/ }))
+    .toHaveAttribute("aria-disabled", "true");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(pathInput())
+    .toHaveValue("/repos/project.worktrees/branch-042");
+  await search.fill("no-such-branch");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(ready()).toHaveTextContent("ready");
+  await expect
+    .element(pathInput())
+    .toHaveValue("/repos/project.worktrees/branch-042");
 });

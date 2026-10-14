@@ -38,7 +38,7 @@ type Info struct {
 	Cmd          []string   `json:"cmd"`
 	Status       Status     `json:"status"`
 	ExitCode     *int       `json:"exitCode"`
-	LastLine     string     `json:"lastLine"`
+	Preview      string     `json:"preview"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	LastActiveAt time.Time  `json:"lastActiveAt"`
 	Cols         uint16     `json:"cols"`
@@ -214,6 +214,7 @@ func (s *Session) Resize(cols, rows uint16) error {
 	if err == nil {
 		s.info.Cols = cols
 		s.info.Rows = rows
+		s.info.Preview = s.preview.Resize(cols, rows)
 	}
 	s.mu.Unlock()
 	return err
@@ -235,7 +236,7 @@ func (s *Session) read() {
 					s.info.Title = title
 				}
 			})
-			s.info.LastLine = s.preview.Feed(p)
+			s.info.Preview = s.preview.Feed(p)
 			s.info.LastActiveAt = time.Now()
 			s.info.Status = StatusRunning
 			if len(s.subs) > 0 {

@@ -230,7 +230,7 @@ func (m *Manager) updates() {
 	timer := time.NewTicker(500 * time.Millisecond)
 	defer timer.Stop()
 	previous := make(map[string]Info)
-	lineSent := make(map[string]time.Time)
+	previewSent := make(map[string]time.Time)
 	var table processTable
 	probeTick := false
 	for {
@@ -250,14 +250,14 @@ func (m *Manager) updates() {
 				s.evaluate(now, table, m.options.IdleAfter, m.patterns)
 				info := s.Info()
 				old, known := previous[id]
-				if known && now.Sub(lineSent[id]) < 2*time.Second {
-					info.LastLine = old.LastLine
+				if known && now.Sub(previewSent[id]) < 2*time.Second {
+					info.Preview = old.Preview
 				}
 				if !known || !sameDisplay(old, info) {
 					m.publishLocked(Event{Type: "updated", Session: &info})
 					s.publishState()
-					if !known || old.LastLine != info.LastLine {
-						lineSent[id] = now
+					if !known || old.Preview != info.Preview {
+						previewSent[id] = now
 					}
 					previous[id] = info
 				}
@@ -265,7 +265,7 @@ func (m *Manager) updates() {
 			for id := range previous {
 				if _, exists := m.sessions[id]; !exists {
 					delete(previous, id)
-					delete(lineSent, id)
+					delete(previewSent, id)
 				}
 			}
 			m.mu.Unlock()

@@ -14,7 +14,7 @@ export const SessionInfoSchema = z.object({
   cmd: z.array(z.string()).min(1),
   status: z.enum(["running", "waiting", "idle", "exited"]),
   exitCode: z.number().int().nullable(),
-  lastLine: z.string(),
+  preview: z.string(),
   createdAt: z.iso.datetime({ offset: true }),
   lastActiveAt: z.iso.datetime({ offset: true }),
   cols: z.number().int().min(1).max(1000),

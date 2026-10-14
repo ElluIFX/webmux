@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"os/exec"
 	"regexp"
 	"testing"
 	"time"
@@ -29,6 +31,33 @@ func TestPreviewSplitUnicodeAndANSI(t *testing.T) {
 	}
 	if got := p.last; got != "Continue?" {
 		t.Fatal(got)
+	}
+}
+
+func TestStatusUsesLatestPreviewLine(t *testing.T) {
+	now := time.Now()
+	var table processTable
+	for _, row := range []struct {
+		name, output, pattern string
+		want                  Status
+	}{
+		{"earlier prompt", "Continue?\r\nfinished", `Continue\?`, StatusIdle},
+		{"current prompt", "working\r\nContinue?", `^Continue\?$`, StatusWaiting},
+		{"trailing blanks", "working\r\nContinue?\r\n\r\n", `^Continue\?$`, StatusWaiting},
+		{"rewritten prompt", "working\r\nContinue?\r\x1b[Kdone", `Continue\?`, StatusIdle},
+		{"erased prompt", "Continue?\r\x1b[2K", `Continue\?`, StatusIdle},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			s := Session{
+				info: Info{LastActiveAt: now.Add(-31 * time.Second)},
+				cmd:  &exec.Cmd{Process: &os.Process{Pid: -1}},
+			}
+			s.info.Preview = s.preview.Feed([]byte(row.output))
+			s.evaluate(now, table, 30*time.Second, []*regexp.Regexp{regexp.MustCompile(row.pattern)})
+			if s.info.Status != row.want {
+				t.Fatalf("preview %q, latest %q: status = %s, want %s", s.info.Preview, s.preview.last, s.info.Status, row.want)
+			}
+		})
 	}
 }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { IconSun, IconMoon } from "@tabler/icons-svelte";
+  import { IconSun, IconMoon, IconChevronDown } from "@tabler/icons-svelte";
   import { toggleTheme } from "../theme";
   import { api } from "../api";
   import {
@@ -20,6 +20,8 @@
   import { Skeleton } from "$lib/components/ui/skeleton";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as AlertDialog from "$lib/components/ui/alert-dialog";
+  import * as Collapsible from "$lib/components/ui/collapsible";
+  import * as Empty from "$lib/components/ui/empty";
   import NewSessionSheet from "../components/NewSessionSheet.svelte";
   import CloseSessionDialog from "../components/CloseSessionDialog.svelte";
   import WorkspaceGroup from "../components/WorkspaceGroup.svelte";
@@ -209,7 +211,6 @@
         >
         <Button
           variant="outline"
-          size="sm"
           class="shrink-0"
           aria-label={dark ? "切换为白色主题" : "切换为黑色主题"}
           onclick={toggleTheme}
@@ -264,16 +265,11 @@
         Git 状态刷新失败：{repositoryError}。保留上次快照与全部会话。
       </p>{/if}
     {#if loading}
-      <div
-        class="grid gap-4 md:grid-cols-2 lg:grid-cols-3"
-        aria-label="正在加载会话"
-      >
-        {#each [0, 1, 2] as item (item)}<Skeleton
-            class="h-56 w-full rounded-xl"
-          />{/each}
+      <div class="space-y-4" aria-label="正在加载会话">
+        {#each [0, 1, 2] as item (item)}<Skeleton class="h-40 w-full" />{/each}
       </div>
     {:else}
-      <div class="space-y-5">
+      <div class="space-y-8">
         {#each repositories as repo (repo.id)}
           {@const repoSessions = list.filter(
             (s) => s.workspace?.repositoryId === repo.id,
@@ -282,33 +278,27 @@
             (s) =>
               !repo.worktrees.some((w) => w.id === s.workspace?.worktreeId),
           )}
-          <section
-            class="min-w-0 rounded-xl border bg-card/50"
+          <Collapsible.Root
+            class="min-w-0 space-y-4"
             data-repository-id={repo.id}
+            role="region"
             aria-label={`仓库 ${repo.name}`}
+            open={expanded[repo.id] ?? false}
+            onOpenChange={(open) => {
+              expanded[repo.id] = open;
+            }}
           >
-            <div class="flex flex-wrap items-center gap-2 p-4 sm:p-5">
-              <button
-                type="button"
-                class="flex w-full min-w-0 flex-none items-start gap-2 text-left focus-visible:outline-2 focus-visible:outline-ring sm:w-auto sm:flex-1"
-                aria-expanded={expanded[repo.id] ?? false}
-                onclick={() => {
-                  expanded[repo.id] = !expanded[repo.id];
-                }}
-              >
-                <span
-                  class="mt-1 shrink-0 text-muted-foreground"
-                  aria-hidden="true">{expanded[repo.id] ? "▾" : "▸"}</span
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="w-full min-w-0 flex-none sm:w-auto sm:flex-1">
+                <Collapsible.Trigger
+                  class="group flex min-w-0 max-w-full items-center gap-2 text-left font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                <span class="min-w-0"
-                  ><span class="block font-semibold break-all">{repo.name}</span
-                  ><span class="mt-1 block text-xs text-muted-foreground"
-                    >{repo.worktrees.length} 工作区 · {counts(
-                      repoSessions,
-                    )}</span
-                  ></span
-                >
-              </button>
+                  <IconChevronDown
+                    class="size-4 shrink-0 -rotate-90 transition-transform group-data-[state=open]:rotate-0"
+                  />
+                  <span class="min-w-0 break-all">{repo.name}</span>
+                </Collapsible.Trigger>
+              </h2>
               <Button
                 variant="outline"
                 size="sm"
@@ -335,12 +325,15 @@
                   ></DropdownMenu.Content
                 >
               </DropdownMenu.Root>
+              <p class="w-full text-xs text-muted-foreground">
+                {repo.worktrees.length} 工作区 · {counts(repoSessions)}
+              </p>
               <p
-                class="w-full pl-5 font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground"
+                class="w-full font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground"
               >
                 {repo.anchorPath}
               </p>
-              <p class="w-full pl-5 text-xs text-muted-foreground">
+              <p class="w-full text-xs text-muted-foreground">
                 {refreshing
                   ? "正在重新读取 Git 状态…"
                   : `Git 读取时间：${new Date(repo.checkedAt).toLocaleString()}`}{repo.availability ===
@@ -350,15 +343,12 @@
               </p>
               {#if repo.error}<p
                   role="alert"
-                  class="w-full pl-5 text-sm break-all text-destructive"
+                  class="w-full text-sm break-all text-destructive"
                 >
                   {repo.error}
                 </p>{/if}
             </div>
-            <div
-              hidden={!expanded[repo.id]}
-              class="space-y-3 border-t p-3 sm:p-4"
-            >
+            <Collapsible.Content class="space-y-4">
               {#each [...repo.worktrees].sort( (a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ) as tree (tree.id)}
                 <WorkspaceGroup
                   title={tree.branch ||
@@ -399,12 +389,12 @@
                     ? "无法读取工作树，请检查路径与 Git 权限，或从列表移除。"
                     : "暂无可用工作树。"}
                 </p>{/if}
-            </div>
-          </section>
+            </Collapsible.Content>
+          </Collapsible.Root>
         {/each}
         {#if direct.length}
-          <section class="min-w-0 space-y-3" aria-label="直接会话">
-            <div class="pt-3">
+          <section class="min-w-0 space-y-4" aria-label="直接会话">
+            <div>
               <h2 class="font-semibold">直接会话</h2>
               <p class="mt-1 text-xs text-muted-foreground">
                 普通目录或未注册的仓库 · {counts(direct)}
@@ -422,18 +412,20 @@
           </section>
         {/if}
         {#if !repositories.length && !list.length}
-          <section
-            class="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed bg-card/40 p-6 text-center"
-          >
-            <h2 class="text-xl font-medium">还没有会话</h2>
-            <p class="mt-2 mb-6 max-w-md text-sm text-muted-foreground">
-              直接启动 Shell 或 agent；也可添加已有仓库，按 worktree
-              组织多个独立终端。
-            </p>
-            <Button disabled={!presets.length} onclick={() => start()}
-              >＋ 新建会话</Button
-            >
-          </section>
+          <Empty.Root>
+            <Empty.Header>
+              <Empty.Title>还没有会话</Empty.Title>
+              <Empty.Description>
+                直接启动 Shell 或 agent；也可添加已有仓库，按 worktree
+                组织多个独立终端。
+              </Empty.Description>
+            </Empty.Header>
+            <Empty.Content>
+              <Button disabled={!presets.length} onclick={() => start()}
+                >＋ 新建会话</Button
+              >
+            </Empty.Content>
+          </Empty.Root>
         {/if}
       </div>
     {/if}

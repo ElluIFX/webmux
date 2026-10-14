@@ -111,10 +111,7 @@ test("repository → two worktrees → shared PTYs → guarded force removal ret
   await writeFile(join(first.path, ".env"), "SECRET=local\n");
   await page.goto("/");
   await expand(repo);
-  await expand(alphaGroup);
-  await expect(alphaGroup.getByText("共享目录 · 2 个独立终端")).toBeVisible();
   await expect(page.locator(".session-link")).toHaveCount(3);
-  await expect(alphaGroup.getByText("忽略文件", { exact: true })).toBeVisible();
   const route = `/api/repositories/${repos[0].id}/worktrees/${alpha.id}`;
   const preview = await (
     await request.post(route + "/removal-preview", { data: {} })
@@ -321,7 +318,6 @@ test("multiple repositories keep every session visible through local failure, co
       page.getByRole("link", { name: item.title, exact: true }),
     ).toHaveCount(1);
   const firstGroup = page.locator(`[data-repository-id="${registered[0].id}"]`);
-  await expect(firstGroup.getByText("共享目录 · 2 个独立终端")).toBeVisible();
   const order = await page
     .locator("[data-repository-id]")
     .evaluateAll((nodes) =>
@@ -330,7 +326,6 @@ test("multiple repositories keep every session visible through local failure, co
   const toggle = firstGroup.locator("button[aria-expanded]").first();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(toggle).toContainText("等待");
   await page.getByRole("button", { name: "刷新 Git 状态" }).click();
   await expect(
     page.getByRole("button", { name: "刷新 Git 状态" }),
@@ -391,7 +386,8 @@ test("existing branch creation, safe removal and stale destructive confirmation 
     .getByRole("button", { name: "新建 worktree", exact: true })
     .click();
   await page.getByRole("button", { name: "使用已有分支", exact: true }).click();
-  await page.getByLabel("已有本地分支").selectOption("spare");
+  await page.getByLabel("已有本地分支", { exact: true }).fill("spare");
+  await page.getByRole("option", { name: "spare", exact: true }).click();
   await expect(page.getByLabel("新工作树完整路径")).toHaveValue(/\/spare$/);
   const path = await page.getByLabel("新工作树完整路径").inputValue();
   await page.getByRole("button", { name: "仅创建工作树", exact: true }).click();

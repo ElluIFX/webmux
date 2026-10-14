@@ -5,6 +5,8 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
+  import * as Command from "$lib/components/ui/command";
+  import { ScrollArea } from "$lib/components/ui/scroll-area";
   import type { z } from "zod";
   let {
     repository,
@@ -13,6 +15,7 @@
     branch = $bindable(""),
     base = $bindable(""),
     ready = $bindable(false),
+    disabled = false,
   }: {
     repository: Repository;
     path: string;
@@ -20,6 +23,7 @@
     branch: string;
     base: string;
     ready: boolean;
+    disabled?: boolean;
   } = $props();
   let data = $state<z.infer<typeof BranchesSchema> | null>(null);
   let error = $state("");
@@ -171,21 +175,70 @@
   {:else}
     <div class="space-y-2">
       <Label for="existing-branch">已有本地分支</Label>
-      <select
-        id="existing-branch"
-        bind:value={branch}
-        required
-        class="h-10 w-full min-w-0 rounded-md border bg-background px-3 text-sm"
+      <Command.Root
+        label="已有本地分支"
+        class="h-auto min-w-0 border"
+        filter={(value, search) =>
+          value.toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0}
+        disableInitialScroll
       >
-        <option value="">选择未被占用的分支</option>
-        {#each data?.branches || [] as item}<option
-            value={item.name}
-            disabled={item.worktreePaths.length > 0}
-            >{item.name}{item.worktreePaths.length
-              ? "（已被工作树占用）"
-              : ""}</option
-          >{/each}
-      </select>
+        <Command.Input
+          id="existing-branch"
+          placeholder="搜索本地分支…"
+          aria-describedby="existing-branch-selection"
+          disabled={disabled || loading || !data}
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck={false}
+        />
+        <ScrollArea
+          type="always"
+          class="h-48 min-w-0 overflow-hidden"
+          scrollbarYClasses="bg-muted/50 [&_[data-slot=scroll-area-thumb]]:bg-muted-foreground"
+        >
+          <Command.List
+            aria-label="本地分支列表"
+            class="max-h-none overflow-visible pr-3"
+          >
+            <Command.Empty>
+              {loading
+                ? "正在读取本地分支…"
+                : error
+                  ? "无法读取本地分支"
+                  : "没有匹配的本地分支"}
+            </Command.Empty>
+            {#each data?.branches || [] as item (item.name)}
+              <Command.Item
+                value={item.name}
+                disabled={disabled || item.worktreePaths.length > 0}
+                data-checked={branch === item.name}
+                onSelect={() => {
+                  branch = item.name;
+                }}
+              >
+                <span class="min-w-0 flex-1 break-all">
+                  {item.name}
+                  {#if item.worktreePaths.length}
+                    <span class="block text-muted-foreground"
+                      >已被工作树占用</span
+                    >
+                  {/if}
+                </span>
+              </Command.Item>
+            {/each}
+          </Command.List>
+        </ScrollArea>
+      </Command.Root>
+      <p
+        id="existing-branch-selection"
+        role="status"
+        class="break-all text-xs text-muted-foreground"
+      >
+        {branch
+          ? `已选择：${branch}`
+          : "搜索后点击分支，或用 ↑↓ 和 Enter 选择未被占用的分支。"}
+      </p>
     </div>
   {/if}
   <div class="space-y-2">

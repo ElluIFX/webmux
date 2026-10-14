@@ -2,88 +2,114 @@ package session
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
+
+	"github.com/0magnet/xterm-go/vt"
 )
 
-// Preview ignores split CSI/OSC sequences and retains a bounded printable line.
+const (
+	maxPreviewLines = 3
+	maxPreviewRunes = 120
+)
+
+// Preview observes the PTY's current screen, not its append-only output history.
+// It is owned by Session.mu; terminal replies must never reach the real PTY.
+// Only the bottom three nonempty screen rows are exposed as plain text.
 type Preview struct {
-	state      byte
-	line       []rune
-	pending    [utf8.UTFMax]byte
-	pendingLen int
-	last       string
+	screen *vt.Terminal
+	last   string // Bottom nonempty screen row, used for status classification.
+	text   string
 }
 
+// Resize follows successful PTY resizes, including before the first output.
+func (s *Preview) Resize(cols, rows uint16) string {
+	if s.screen == nil {
+		options := vt.NewOptions()
+		options.Cols, options.Rows = int(cols), int(rows)
+		options.Scrollback = 0
+		// Leave OnData unset: this observer must not answer device queries or
+		// inject input. Only the browser terminal may write back to the PTY.
+		s.screen = vt.NewTerminal(options)
+	} else if s.screen.Cols() != int(cols) || s.screen.Rows() != int(rows) {
+		s.screen.Resize(int(cols), int(rows))
+	} else {
+		return s.text
+	}
+	return s.snapshot()
+}
+
+// Feed consumes split UTF-8 and terminal control sequences without changing
+// the bytes delivered to subscribers. Screen erasure also clears the preview.
 func (s *Preview) Feed(p []byte) string {
-	for _, b := range p {
-		switch s.state {
-		case 0:
-			if b == 27 {
-				s.state = 1
-			} else if b == '\n' || b == '\r' {
-				s.pendingLen = 0
-				s.save()
-				s.line = s.line[:0]
-			} else if b >= 32 || b == '\t' {
-				s.consumeByte(b)
-			}
-		case 1:
-			switch b {
-			case '[':
-				s.state = 2
-			case ']', 'P', '^', '_', 'X':
-				s.state = 3
-			case '(', ')', '*', '+':
-				s.state = 5
-			default:
-				s.state = 0
-			}
-		case 2:
-			if b >= 0x40 && b <= 0x7e {
-				s.state = 0
-			}
-		case 3:
-			switch b {
-			case 7:
-				s.state = 0
-			case 27:
-				s.state = 4
-			}
-		case 4:
-			if b == '\\' {
-				s.state = 0
-			} else {
-				s.state = 3
-			}
-		case 5:
-			s.state = 0
+	if len(p) == 0 {
+		return s.text
+	}
+	if s.screen == nil {
+		s.Resize(80, 24)
+	}
+	s.screen.Write(p)
+	return s.snapshot()
+}
+
+func (s *Preview) snapshot() string {
+	var lines [maxPreviewLines]string
+	n := maxPreviewLines
+	for y := s.screen.Rows() - 1; y >= 0 && n > 0; y-- {
+		if line := s.row(y); line != "" {
+			n--
+			lines[n] = line
 		}
 	}
-	s.save()
-	return s.last
+	s.last = ""
+	if n < maxPreviewLines {
+		s.last = strings.TrimSpace(lines[maxPreviewLines-1])
+	}
+	s.text = strings.Join(lines[n:], "\n")
+	return s.text
 }
-func (s *Preview) consumeByte(b byte) {
-	if s.pendingLen == 0 && b < utf8.RuneSelf {
-		s.appendRune(rune(b))
-		return
+
+// row preserves indentation and omits wide-character continuation cells.
+// Truncation never splits a UTF-8 character or the contents of a combined cell.
+func (s *Preview) row(y int) string {
+	buffer := s.screen.Buffer()
+	line := buffer.Lines.Get(buffer.YBase + y)
+	if line == nil {
+		return ""
 	}
-	s.pending[s.pendingLen] = b
-	s.pendingLen++
-	for s.pendingLen > 0 && utf8.FullRune(s.pending[:s.pendingLen]) {
-		r, n := utf8.DecodeRune(s.pending[:s.pendingLen])
-		s.appendRune(r)
-		copy(s.pending[:], s.pending[n:s.pendingLen])
-		s.pendingLen -= n
+	end := line.Length - 1
+	for end >= 0 {
+		if line.HasContent(end) && !unicode.IsSpace(rune(line.GetCodePoint(end))) {
+			break
+		}
+		end--
 	}
-}
-func (s *Preview) appendRune(r rune) {
-	if len(s.line) < 120 {
-		s.line = append(s.line, r)
+	if end < 0 {
+		return ""
 	}
-}
-func (s *Preview) save() {
-	text := strings.TrimSpace(string(s.line))
-	if text != "" {
-		s.last = text
+	var buf [maxPreviewRunes * utf8.UTFMax]byte
+	text := buf[:0]
+	runes := 0
+	for x := 0; x <= end && runes < maxPreviewRunes; {
+		if !line.HasContent(x) {
+			text = append(text, ' ')
+			runes++
+			x++
+			continue
+		}
+		if line.IsCombined(x) {
+			content := line.GetString(x)
+			n := utf8.RuneCountInString(content)
+			if runes+n > maxPreviewRunes {
+				break
+			}
+			text = append(text, content...)
+			runes += n
+		} else {
+			text = utf8.AppendRune(text, rune(line.GetCodePoint(x)))
+			runes++
+		}
+		x += max(1, line.GetWidth(x))
 	}
+	return string(text)
 }

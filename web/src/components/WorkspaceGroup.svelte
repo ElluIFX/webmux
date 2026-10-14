@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { untrack } from "svelte";
   import type { SessionInfo, Worktree } from "../schemas";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-  import SessionCard from "./SessionCard.svelte";
+  import * as Card from "$lib/components/ui/card";
+  import * as Item from "$lib/components/ui/item";
+  import { Separator } from "$lib/components/ui/separator";
+  import SessionRow from "./SessionRow.svelte";
   let {
     title,
     path,
@@ -24,7 +26,6 @@
     onstart?: () => void;
     onremove?: () => void;
   } = $props();
-  let expanded = $state(untrack(() => sessions.length > 0));
   const counts = $derived({
     running: sessions.filter(
       (s) => s.status === "running" || s.status === "idle",
@@ -34,55 +35,62 @@
   });
 </script>
 
-<section
-  class="min-w-0 rounded-lg border bg-background/50"
+<Card.Root
+  class="min-w-0"
+  role="region"
   data-worktree-id={worktree?.id}
   aria-label={title}
 >
-  <div class="flex flex-wrap items-center gap-2 p-3 sm:p-4">
-    <button
-      type="button"
-      class="flex min-w-0 flex-1 items-start gap-2 text-left focus-visible:outline-2 focus-visible:outline-ring"
-      aria-expanded={expanded}
-      onclick={() => {
-        expanded = !expanded;
-      }}
+  <Card.Header>
+    <Card.Title
+      class="col-span-full col-start-1 row-start-1 min-w-0 break-all sm:col-span-1"
     >
-      <span class="mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true"
-        >{expanded ? "▾" : "▸"}</span
+      <h3>{title}</h3>
+    </Card.Title>
+    <Card.Description
+      class="col-span-full col-start-1 row-start-2 min-w-0 sm:col-span-1"
+    >
+      {#if path}<span class="block font-mono break-all whitespace-pre-wrap"
+          >{path}</span
+        >{/if}
+      <span class="block"
+        >运行 {counts.running} · 等待 {counts.waiting} · 退出 {counts.exited}</span
       >
-      <span class="min-w-0 space-y-1">
-        <span class="block text-sm font-medium break-all">{title}</span>
-        <span class="block text-xs text-muted-foreground"
-          >运行 {counts.running} · 等待 {counts.waiting} · 退出 {counts.exited}</span
-        >
-      </span>
-    </button>
-    {#if onstart}<Button
-        size="sm"
-        variant="outline"
-        disabled={worktree && (!worktree.available || worktree.kind === "bare")}
-        onclick={onstart}>启动会话</Button
-      >{/if}
-    {#if onremove}
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          >{#snippet child({ props })}<Button
-              {...props}
-              size="icon-sm"
-              variant="ghost"
-              aria-label={`工作树菜单 ${title}`}>⋯</Button
-            >{/snippet}</DropdownMenu.Trigger
-        >
-        <DropdownMenu.Content align="end"
-          ><DropdownMenu.Item variant="destructive" onSelect={onremove}
-            >删除 worktree</DropdownMenu.Item
-          ></DropdownMenu.Content
-        >
-      </DropdownMenu.Root>
+    </Card.Description>
+    {#if onstart || onremove}
+      <Card.Action
+        class="col-start-1 row-start-3 row-span-1 flex items-center gap-2 justify-self-start sm:col-start-2 sm:row-start-1 sm:row-span-2 sm:justify-self-end"
+      >
+        {#if onstart}<Button
+            size="sm"
+            variant="outline"
+            disabled={worktree &&
+              (!worktree.available || worktree.kind === "bare")}
+            onclick={onstart}>启动会话</Button
+          >{/if}
+        {#if onremove}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              {#snippet child({ props })}
+                <Button
+                  {...props}
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label={`工作树菜单 ${title}`}>⋯</Button
+                >
+              {/snippet}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end">
+              <DropdownMenu.Item variant="destructive" onSelect={onremove}
+                >删除 worktree</DropdownMenu.Item
+              >
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        {/if}
+      </Card.Action>
     {/if}
-    <div class="flex w-full flex-wrap gap-1.5 pl-5 text-xs">
-      {#if worktree}
+    {#if worktree}
+      <div class="col-span-full flex flex-wrap items-center gap-1.5">
         {#if worktree.kind === "main"}<Badge variant="secondary">主工作区</Badge
           >{/if}
         {#if worktree.kind === "bare"}<Badge variant="secondary"
@@ -99,42 +107,32 @@
         {:else}<Badge variant="secondary">已跟踪文件干净</Badge>{/if}
         {#if worktree.hasUntracked}<Badge variant="outline">未跟踪文件</Badge
           >{/if}
-        {#if worktree.hasIgnored}<Badge variant="outline">忽略文件</Badge>{/if}
-      {/if}
-      {#if sessions.length > 1}<Badge variant="outline"
-          >共享目录 · {sessions.length} 个独立终端</Badge
-        >{/if}
-    </div>
-    {#if path}<p
-        class="w-full pl-5 font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground"
-      >
-        {path}
-      </p>{/if}
+      </div>
+    {/if}
     {#if worktree?.lockReason}<p
-        class="w-full pl-5 text-xs break-all whitespace-pre-wrap text-muted-foreground"
+        class="col-span-full break-all whitespace-pre-wrap text-muted-foreground"
       >
         锁定原因：{worktree.lockReason}
       </p>{/if}
     {#if worktree?.error}<p
         role="alert"
-        class="w-full pl-5 text-xs break-all text-destructive"
+        class="col-span-full break-all whitespace-pre-wrap text-destructive"
       >
         {worktree.error}
       </p>{/if}
-  </div>
-  {#if expanded}
-    <div class="border-t p-3 sm:p-4">
-      {#if sessions.length}
-        <div class="grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {#each sessions as session (session.id)}<SessionCard
-              {session}
-              {now}
-              {onclose}
-            />{/each}
-        </div>
-      {:else}<p class="text-sm text-muted-foreground">
-          暂无会话。工作树独立保留，可以随时启动。
-        </p>{/if}
-    </div>
-  {/if}
-</section>
+  </Card.Header>
+  <Card.Content>
+    {#if sessions.length}
+      <Item.Group aria-label={`${title} 的会话`}>
+        {#each sessions as session, index (session.id)}
+          {#if index > 0}<Separator />{/if}
+          <SessionRow {session} {now} {onclose} />
+        {/each}
+      </Item.Group>
+    {:else}
+      <p class="text-muted-foreground">
+        暂无会话。工作树独立保留，可以随时启动。
+      </p>
+    {/if}
+  </Card.Content>
+</Card.Root>

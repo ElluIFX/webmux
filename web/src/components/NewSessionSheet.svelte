@@ -250,6 +250,7 @@
         {:else if repository}
           {#key repository.id}<WorktreeCreateFields
               {repository}
+              disabled={busy}
               bind:path={newPath}
               bind:mode={branchMode}
               bind:branch

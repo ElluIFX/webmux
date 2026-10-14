@@ -34,7 +34,7 @@ func (s *Session) evaluate(now time.Time, table processTable, idleAfter time.Dur
 	if s.info.ExitCode == nil && now.Sub(s.info.LastActiveAt) >= 2*time.Second {
 		blocked = foregroundBlocked(s.cmd.Process.Pid, table)
 	}
-	s.info.Status = classify(now, s.info.LastActiveAt, s.info.LastLine, s.info.ExitCode != nil, blocked, idleAfter, patterns)
+	s.info.Status = classify(now, s.info.LastActiveAt, s.preview.last, s.info.ExitCode != nil, blocked, idleAfter, patterns)
 }
 func (s *Session) publishState() {
 	s.mu.Lock()
@@ -44,7 +44,7 @@ func (s *Session) publishState() {
 	}
 }
 func sameDisplay(a, b Info) bool {
-	return a.Title == b.Title && a.Status == b.Status && a.LastLine == b.LastLine && a.LastActiveAt.Equal(b.LastActiveAt) && a.Cols == b.Cols && a.Rows == b.Rows && a.Clients == b.Clients && sameExit(a.ExitCode, b.ExitCode) && sameWorkspace(a.Workspace, b.Workspace)
+	return a.Title == b.Title && a.Status == b.Status && a.Preview == b.Preview && a.LastActiveAt.Equal(b.LastActiveAt) && a.Cols == b.Cols && a.Rows == b.Rows && a.Clients == b.Clients && sameExit(a.ExitCode, b.ExitCode) && sameWorkspace(a.Workspace, b.Workspace)
 }
 func sameExit(a, b *int) bool {
 	if a == nil || b == nil {

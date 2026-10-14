@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
-  import { IconMaximize, IconMinimize } from "@tabler/icons-svelte";
+  import {
+    IconArrowLeft,
+    IconMaximize,
+    IconMinimize,
+  } from "@tabler/icons-svelte";
   import { apiBuffer, navigate, statusText } from "../api";
   import { useTerminal } from "../hooks/terminal.svelte";
   import { useViewport } from "../hooks/viewport.svelte";
@@ -143,8 +147,10 @@
       variant="ghost"
       size="icon-sm"
       aria-label="返回会话列表"
-      onclick={() => navigate("/")}>←</Button
+      onclick={() => navigate("/")}
     >
+      <IconArrowLeft class="size-4" aria-hidden="true" />
+    </Button>
     <span class="min-w-0 flex-1 truncate text-sm font-medium"
       >{t.info?.title || "终端"}</span
     >

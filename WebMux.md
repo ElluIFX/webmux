@@ -40,7 +40,7 @@ WebMux 是一个运行在单台 Linux 或 macOS 机器上的 Go 单二进制 Web
 | 技术栈     | Go 单二进制，前端嵌入                             | `go:embed` 打包前端产物，`go build` 即得部署物              |
 | 运行身份   | 当前系统用户，单用户                              | 不做 setuid / 用户切换，不做鉴权细粒度                      |
 | 服务重启   | 会话随服务退出，仓库清单保留                      | 仅注册清单落盘；PTY、缓冲和会话列表仅在内存中               |
-| 欢迎页     | 仓库 → 主工作区 / worktree → 会话，两级折叠       | Git 快照与实时会话分离，直接目录启动不依赖 Git              |
+| 欢迎页     | 仓库标题 → 工作树卡片 → 会话列表，仅仓库折叠      | Git 快照与实时会话分离，直接目录启动不依赖 Git              |
 | 会话 title | 优先终端 OSC 0/2 设置的 title，没有则用工作目录名 | 服务端解析 PTY 输出流中的 OSC 序列                          |
 | 新建会话   | 选工作目录 + 预设或自定义启动命令                 | 预设列表来自配置文件，默认含 shell、claude、codex、omp      |
 | 会话状态   | 运行中 / 等待输入 / 空闲 / 已退出                 | 基于输出活跃度 + 前台进程启发式判断                         |
@@ -60,26 +60,24 @@ WebMux 是一个运行在单台 Linux 或 macOS 机器上的 Go 单二进制 Web
 
 ### 3.1 欢迎页 `/`
 
-顶部保留品牌、连接状态、主题与“新建会话”，提供“添加仓库”和“刷新 Git 状态”。正文按注册顺序展示仓库，仓库内主工作区优先，其余工作树按规范路径排序；组内会话按最近活跃时间排序，输出更新不重排上层分组。仓库与工作树均可折叠，标题始终显示运行 / 等待 / 退出数量。空组仍保留操作入口；未注册会话按 cwd 展示在“直接会话”，原工作树失效的会话在仓库内“已不可用工作区”保留，每个会话只出现一次。
+顶部保留品牌、连接状态、主题与“新建会话”，提供“添加仓库”和“刷新 Git 状态”。正文按注册顺序展示无边框仓库分组标题，仓库内主工作区优先，其余工作树按规范路径排序；组内会话按最近活跃时间排序，输出更新不重排上层分组。仓库通过 shadcn Collapsible 折叠，工作树 / 目录是唯一一层 Card，内部使用无边框 Item 会话列表与 Separator，不再嵌套卡片。标题保留运行 / 等待 / 退出数量。空组仍保留操作入口；未注册会话按 cwd 展示在“直接会话”，原工作树失效的会话在仓库内“已不可用工作区”保留，每个会话只出现一次。桌面单列展示工作树，手机将会话状态和活动信息换到标题下方；路径完整换行，输出预览为固定三行观察窗。
 
-每张卡片显示：
+每条会话显示：
 
 - **标题**：OSC title，没有则工作目录名（basename）
 - **状态点 + 文字**：运行中（绿色，有输出流动）、等待输入（黄色，2 秒无输出且光标停在提示符）、空闲（灰色，30 秒以上无输出）、已退出（红色，显示退出码）
-- **工作目录**完整路径，过长时中间省略
-- **启动命令**（如 `claude`、`codex`、`bash`）
 - **最近活跃时间**（相对时间，如“3 分钟前”）
-- **输出预览**：最后一行非空输出，单行截断，方便不打开就知道 agent 在干什么
+- **输出预览**：当前终端屏幕底部三条非空行，独立背景、等宽字体、固定三行高度；空屏幕显示等待提示，少于三行保留空余高度。光标移动、擦行和重绘更新对应屏幕内容，不把旧状态栏当作新增输出行。长行横向裁切、不再次换行，不增加嵌套卡片边框；明暗主题均与卡片背景区分。
 
-卡片交互：
+会话行交互：
 
-- 点击卡片 → 进入终端页
-- 长按 / 右上角菜单 → 重命名（手动名覆盖自动 title，此为可选扩展，本版本只做“关闭会话”）、关闭会话（二次确认，发送 SIGHUP 后 5 秒未退出则 SIGKILL）
+- 会话行最小高度 56px，链接点击区域覆盖整行及上下留白（独立菜单除外）→ 进入终端页；键盘焦点框覆盖整行，保留链接的新标签页打开行为
+- 行末独立菜单 → 关闭会话或移除已退出会话，均通过 AlertDialog 二次确认；打开菜单不会触发进入终端
 - 已退出的会话保留在列表中直到用户手动移除，方便查看最后输出
 
 列表通过 WebSocket `/ws/sessions` 实时更新，不轮询。
 
-工作树标题展示分支或 detached 提交、主工作区 / bare / locked / 缺失标记、完整换行路径，以及修改 / 未跟踪 / 忽略文件状态；未知不能显示干净。Git 状态附读取时间，在挂载、可见、重连、显式刷新和操作后通过 REST 更新，旧响应不能覆盖新状态，单仓库错误不丢弃会话。多会话组明确提示“共享目录”，并不代表文件隔离。
+工作树标题展示分支或 detached 提交、主工作区 / bare / locked / 缺失标记、完整换行路径，以及修改 / 未跟踪文件状态；未知不能显示干净。卡片不显示“忽略文件”或“共享目录 · N 个独立终端”标签，但保留运行 / 等待 / 退出数量；同一目录中的终端进程独立，文件仍共享。删除预览仍检查忽略文件并保留风险提示与确认流程。Git 状态附读取时间，在挂载、可见、重连、显式刷新和操作后通过 REST 更新，旧响应不能覆盖新状态，单仓库错误不丢弃会话。
 
 ### 3.2 新建会话弹层
 
@@ -91,6 +89,8 @@ WebMux 是一个运行在单台 Linux 或 macOS 机器上的 Go 单二进制 Web
 4. 确认按钮：创建成功后直接跳转终端页
 
 启动位置提供三种模式：全局默认“直接目录”；工作树上下文预选“已有工作树”；仓库上下文预选“新工作树”。创建表单分开选择新分支 / 已有本地分支、明确基线和完整目标路径。新分支预填可修改的 `wt/<形容词>-<名词>`，不在服务端静默改名。默认位于仓库旁的 `<basename>.worktrees/<分支最后一段>`。可仅创建工作树；“创建并进入”先创建工作树再启动命令，后者失败保留前者，重试不重复创建。不自动 fetch、复制环境文件或安装依赖。同一工作树可启动多个独立 PTY，启动 cwd 可为其子目录，不追踪终端后续 cd。
+
+已有本地分支选择器使用 shadcn `Command` + `ScrollArea`，直接显示在表单内。搜索按分支名进行不区分大小写的连续子串匹配，不将近似分支名当作匹配项；搜索框固定，列表限高滚动并提供可拖动滚动条。点击或 ↑↓ / Enter 提交选择，显示勾选及当前已选分支；搜索、悬停和键盘高亮不改变已提交选择，也不直接提交创建表单。占用分支显示原因并禁选，创建处理中禁用选择。选择更新默认目标路径，但保留用户手动修改的路径。
 
 “从列表移除仓库”只修改登记，不关闭会话或删除文件 / 分支。“删除 worktree”默认保护修改、未跟踪 / 忽略文件和活动会话；强制删除进入独立确认页，展示完整路径、分支保留、会话列表、外部进程及全部内容丢失风险，要求完整路径输入和未预选的关闭授权。主工作区、bare、locked、缺失 / 未知状态及含子模块 / 嵌套仓库的目标不能通过页面删除；关闭会话永不触发工作树删除。
 
@@ -186,7 +186,7 @@ type Session struct {
     title     string     // OSC 解析结果，空则用 filepath.Base(Cwd)
     userTitle string     // 预留：手动改名
     lastOut   time.Time  // 最近一次有输出的时间
-    lastLine  string     // 最后一行非空输出（去除 ANSI 后），用于列表预览
+    preview   Preview    // 只读终端屏幕状态；底部三条非空行，末行供状态探测使用
     status    Status
     exitCode  *int
 
@@ -203,7 +203,7 @@ type Session struct {
 3. 环境变量：继承服务进程环境，并显式设置 `TERM=xterm-256color`、`COLORTERM=truecolor`、`LANG`（继承）、`WEBMUX_SESSION_ID=<id>`
 4. `pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})` 启动；初始尺寸随后由第一个附着的客户端 resize 覆盖
 5. 启动三个 goroutine：
-   - **reader**：循环 `pty.Read` 到 32 KB 临时缓冲 → 写入 ring → 喂给 OSC 扫描器和 lastLine 提取器 → 更新 `lastOut` → 广播给所有 `subs`（非阻塞，慢客户端用带缓冲 channel，满则断开该客户端让它重连回放）
+   - **reader**：循环 `pty.Read` 到 32 KB 临时缓冲 → 写入 ring → 喂给 OSC 扫描器和三行 Preview 提取器 → 更新 `lastOut` → 广播给所有 `subs`（非阻塞，慢客户端用带缓冲 channel，满则断开该客户端让它重连回放）
    - **waiter**：`proc.Wait()` 返回后设置 `exitCode`、`status = exited`、关闭 pty、关闭 `done`，广播状态变更
    - **status ticker**：每 1 秒评估一次状态（见 5.5），变化时广播到 `/ws/sessions`
 6. `Manager.Close(id)`：先发 `SIGHUP` 给进程组（`syscall.Kill(-pid, SIGHUP)`，启动时设置 `Setsid: true`），5 秒后仍未退出则 `SIGKILL`
@@ -248,9 +248,11 @@ else → waiting   // 2–30s 无输出且判断不出来，倾向提示用户�
 - `foregroundBlockedOnRead`：取每秒一次的进程表（Linux 为 `/proc/*/stat`，macOS 为 `sysctl kern.proc.all` 加 `proc_pidinfo` 的运行线程数），若整棵进程树（按 ppid 遍历）里没有 `R` 状态进程且叶子进程为 `S`，视为阻塞；其他平台此函数返回 false
 - 状态只是展示用，不驱动任何自动化动作，误判无害
 
-### 5.6 lastLine 提取
+### 5.6 三行输出预览
 
-对每个 chunk 去除 ANSI CSI/OSC 序列（用简单正则 `\x1b\[[0-9;?]*[ -/]*[@-~]` 和 OSC 扫描结果），按 `\n` 和 `\r` 分割取最后一个非空片段，截断到 120 字符存入 `lastLine`。用于欢迎页预览，不要求精确。
+`Preview` 使用固定版本的 `github.com/0magnet/xterm-go/vt` 只读跟踪终端屏幕，初始为 80×24，成功调整 PTY 尺寸后同步 resize。处理跨 chunk 的 UTF-8、光标寻址、回车、擦行/清屏、滚动、宽字符以及主/备用屏幕切换；不按收到的换行片段累计历史。仅从当前屏幕底部提取三条非空行，每行最多 120 个 Unicode 字符，以换行连接为不可变 `preview` 字符串，保留缩进，不截断 UTF-8 或组合字符单元。重复的实际屏幕行仍分别保留，清空屏幕后预览和提示符探测文本同时清空。状态探测读取底部单行，不能用三行拼接结果判断提示符。
+
+预览屏幕不保留额外 scrollback，不注册向 PTY 发送数据的回调；设备查询应仅由真实浏览器终端回应。屏幕状态由 `Session.mu` 保护，不增加连接或后台 goroutine。原始 PTY 字节仍直接进入 ring 和 xterm，预览侧解析不会改写终端帧或回放。构建需要 Go 1.24+。
 
 ### 5.7 Hub 与 Subscriber
 
@@ -315,7 +317,7 @@ interface SessionInfo {
   cmd: string[];
   status: "running" | "waiting" | "idle" | "exited";
   exitCode: number | null;
-  lastLine: string;
+  preview: string; // 当前屏幕底部三条非空行，以 \n 分隔；每行最多 120 个 Unicode 字符
   createdAt: string; // RFC3339
   lastActiveAt: string;
   cols: number;
@@ -343,11 +345,11 @@ interface Preset {
 ```json
 {"type":"snapshot","sessions":[SessionInfo, ...]}
 {"type":"created","session":SessionInfo}
-{"type":"updated","session":SessionInfo}   // 状态、title、lastLine、clients 变化
+{"type":"updated","session":SessionInfo}   // 状态、title、preview、clients 变化
 {"type":"removed","id":"abc123"}
 ```
 
-`updated` 事件节流：同一会话 500 ms 内最多发一次，`lastLine` 的变化单独再节流到 2 s。客户端不需要发任何消息，可定期发 ping 帧保活。
+`updated` 事件节流：同一会话 500 ms 内最多发一次，`preview` 的变化单独再节流到 2 s。客户端不需要发任何消息，可定期发 ping 帧保活。
 
 ### 6.3 WebSocket `/ws/s/{id}`（终端流）
 
@@ -394,8 +396,8 @@ interface Preset {
 
 - 挂载时读取 `/api/presets`、`/api/config`、`/api/repositories` 并连接 `/ws/sessions`，首个会话 snapshot 到达前显示骨架屏；Git 快照加载独立于会话流
 - 会话列表保存在 Svelte `$state` 数组中，事件经 Zod discriminated union 校验后按 id 更新
-- 卡片组件 `SessionCard`：标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、目录、预设名、相对时间（每 30 秒刷新一次）、`lastLine` 单行等宽字体预览
-- 两级稳定分组、局部错误与空工作树行为见 3.1；只有既无仓库又无会话时显示整页“还没有会话”，无需先登记仓库即可直接启动
+- `WorkspaceGroup` 使用单层 shadcn Card 展示工作树 / 目录，内部 `SessionRow` 使用无边框 Item 和 Separator：会话标题、状态点（CSS 类 `status-running` 等，运行中带呼吸动画）、退出码、连接设备数、相对时间（每 30 秒刷新一次）、`preview` 三行终端观察窗。观察窗使用 `pre` 保留逻辑换行，独立背景和固定三行高度，长行裁切且不撑宽移动页面；正文、标题和控件使用系统无衬线字体，路径和终端输出保留等宽字体。
+- 仓库标题使用 Collapsible，工作树和会话不再二次折叠；稳定分组、局部错误与空工作树行为见 3.1。只有既无仓库又无会话时显示 shadcn Empty 整页空状态，无需先登记仓库即可直接启动。
 - `NewSessionSheet`：移动端使用 shadcn Drawer，桌面端使用 Dialog；字段见产品设计 3.2。`DirectoryPicker` 使用 Popover + Command + ScrollArea，仅打开时按路径输入 `debounce 150ms` 请求 `/api/fs/dirs`，支持键盘导航、确认当前目录、隐藏目录切换、加载与错误状态；浏览中的路径与表单工作目录分离。输入、列表与确认区保持间距，目录区域限制最大高度并使用固定可见、可拖动的滚动条，路径和确认区不随目录列表滚动。最近目录存 localStorage `webmux.recentDirs`（最多 10 个），自定义命令存 `webmux.customCommand`。
 - WebSocket 断开时顶部显示黄色细条“连接已断开，重连中…”，自动重连
 
@@ -589,7 +591,7 @@ webmux/
 │   │   ├── schemas.ts         # Zod 数据契约和推导类型
 │   │   ├── ws.ts
 │   │   ├── pages/             # SessionList.svelte、Terminal.svelte
-│   │   ├── components/        # 会话卡片、创建/关闭弹层、软键业务组件
+│   │   ├── components/        # 工作树卡片、会话列表行、创建/关闭弹层、软键业务组件
 │   │   ├── lib/components/ui/ # 官方 shadcn-svelte 生成组件
 │   │   ├── hooks/             # terminal.svelte.ts、viewport.svelte.ts
 │   │   └── styles.css
@@ -616,7 +618,7 @@ webmux/
 | M1  | 核心 Session | `session` 包：PTY 启动、ring、reader/waiter、Close；单元测试覆盖 ring 和 osc 状态机 | `go test ./...` 通过；一个临时 main 能启动 bash 并把输出打到 stdout                       |
 | M2  | 协议与 API   | `api` + `hub`：REST 全部端点、两个 WebSocket、二进制帧协议、token 中间件            | `curl` 创建会话；用 `websocat` 附着并能交互；断开再附着能收到快照                         |
 | M3  | 最小前端     | 终端页可用：xterm + fit + 重连回放；欢迎页能列出、新建、进入、关闭                  | 桌面浏览器完整走通；杀掉浏览器标签后重开能看到历史                                        |
-| M4  | 状态与 title | OSC 解析、状态探测、lastLine 预览、列表实时更新                                     | 开 `claude` 后列表显示其 title；等待权限确认时状态变为“等待输入”                          |
+| M4  | 状态与 title | OSC 解析、状态探测、三行输出预览、列表实时更新                                      | 开 `claude` 后列表显示其 title；等待权限确认时状态变为“等待输入”                          |
 | M5  | 移动端打磨   | 软键栏、键盘视口处理、粘贴回退、字体缩放、PWA manifest、深色主题                    | iOS Safari 和 Android Chrome 真机：能在 `claude` 里输入中文、按 Esc、粘贴多行、横竖屏切换 |
 | M6  | 打包与文档   | Makefile、交叉编译、systemd 文件、README（安装、配置、Tailscale 访问、FAQ）         | 在一台干净的 Linux 上按 README 从零部署成功                                               |
 
