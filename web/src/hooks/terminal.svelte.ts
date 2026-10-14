@@ -478,13 +478,23 @@ export function useTerminal(
     };
     parent.addEventListener("contextmenu", contextMenu);
     term.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type === "keydown" &&
+        !event.altKey &&
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === "v"
+      ) {
+        // Native Ctrl/Cmd+V works without Clipboard API permissions, including
+        // HTTP deployments. Shift+V retains the explicit clipboard action.
+        if (event.shiftKey) {
+          event.preventDefault();
+          clipboard.paste();
+        }
+        return false;
+      }
       if (event.type === "keydown" && event.ctrlKey && event.shiftKey) {
         if (event.key.toLowerCase() === "c") {
           clipboard.copySelection(term.getSelection());
-          return false;
-        }
-        if (event.key.toLowerCase() === "v") {
-          clipboard.paste();
           return false;
         }
       }

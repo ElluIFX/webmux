@@ -44,6 +44,7 @@ func New(c config.Config, m *session.Manager, workspaces *workspace.Service) htt
 	mux.HandleFunc("GET /api/sessions/{id}", s.get)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.delete)
 	mux.HandleFunc("GET /api/sessions/{id}/buffer", s.buffer)
+	mux.HandleFunc("POST /api/sessions/{id}/upload", s.upload)
 	mux.HandleFunc("GET /api/fs/dirs", s.dirs)
 	mux.HandleFunc("POST /api/fs/mkdir", s.mkdir)
 	s.workspaceRoutes(mux)

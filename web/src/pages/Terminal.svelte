@@ -4,8 +4,9 @@
     IconArrowLeft,
     IconMaximize,
     IconMinimize,
+    IconUpload,
   } from "@tabler/icons-svelte";
-  import { apiBuffer, navigate, statusText } from "../api";
+  import { apiBuffer, navigate, statusText, uploadFile } from "../api";
   import { useTerminal } from "../hooks/terminal.svelte";
   import { useViewport } from "../hooks/viewport.svelte";
   import { Button } from "$lib/components/ui/button";
@@ -19,6 +20,15 @@
 
   let { id }: { id: string } = $props();
   let container: HTMLDivElement;
+  let fileInput: HTMLInputElement;
+  let dragging = $state(false);
+  let upload = $state<{
+    name: string;
+    percent: number;
+    index: number;
+    total: number;
+  } | null>(null);
+  let uploadController: AbortController | undefined;
   let error = $state("");
   let closing = $state(false);
   let pasteOpen = $state(false);
@@ -44,6 +54,15 @@
     },
   );
 
+  function filePaste(event: ClipboardEvent) {
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    pasteOpen = false;
+    void uploadFiles(files);
+  }
+
   onMount(() => {
     mounted = true;
     const changed = () => {
@@ -52,8 +71,46 @@
     };
     changed();
     document.addEventListener("fullscreenchange", changed);
+    // Capture before xterm consumes paste/drop events; text still uses xterm.
+    let dragDepth = 0;
+    const dragEnter = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      dragging = true;
+      dragDepth++;
+    };
+    const dragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = upload ? "none" : "copy";
+    };
+    const dragLeave = () => {
+      if (--dragDepth <= 0) {
+        dragDepth = 0;
+        dragging = false;
+      }
+    };
+    const drop = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      dragDepth = 0;
+      dragging = false;
+      void uploadFiles(Array.from(event.dataTransfer.files));
+    };
+    container.addEventListener("paste", filePaste, true);
+    container.addEventListener("dragenter", dragEnter, true);
+    container.addEventListener("dragover", dragOver, true);
+    container.addEventListener("dragleave", dragLeave, true);
+    container.addEventListener("drop", drop, true);
     return () => {
       mounted = false;
+      uploadController?.abort();
+      container.removeEventListener("paste", filePaste, true);
+      container.removeEventListener("dragenter", dragEnter, true);
+      container.removeEventListener("dragover", dragOver, true);
+      container.removeEventListener("dragleave", dragLeave, true);
+      container.removeEventListener("drop", drop, true);
       document.removeEventListener("fullscreenchange", changed);
       if (
         ownsFullscreen &&
@@ -124,12 +181,93 @@
       error = (err as Error).message;
     }
   }
+  async function uploadFiles(files: File[]) {
+    if (!files.length) return;
+    if (upload) {
+      error = "正在上传，请等待当前上传完成。";
+      return;
+    }
+    if (t.connection !== "connected" || t.exitCode !== null) {
+      error = "终端未连接，无法上传文件。";
+      return;
+    }
+    error = "";
+    const controller = new AbortController();
+    uploadController = controller;
+    try {
+      for (const [index, file] of files.entries()) {
+        upload = {
+          name: file.name,
+          percent: 0,
+          index: index + 1,
+          total: files.length,
+        };
+        const { path } = await uploadFile(
+          id,
+          file,
+          (percent) => {
+            if (upload) upload.percent = percent;
+          },
+          controller.signal,
+        );
+        if (!mounted || controller.signal.aborted) return;
+        if (t.connection !== "connected" || t.exitCode !== null)
+          throw new Error(`文件已上传至 ${path}，但终端已断开，路径未发送。`);
+        // Quote arbitrary filenames safely. No newline: uploading never runs a command.
+        t.paste("'" + path.replaceAll("'", "'\\''") + "' ");
+      }
+      t.focus();
+    } catch (err) {
+      if (mounted) error = (err as Error).message;
+    } finally {
+      uploadController = undefined;
+      if (mounted) upload = null;
+    }
+  }
+
   async function paste() {
     try {
-      t.paste(await navigator.clipboard.readText());
+      if (
+        matchMedia("(pointer: fine)").matches &&
+        typeof navigator.clipboard.read === "function"
+      ) {
+        const items = await navigator.clipboard.read();
+        if (!mounted) return;
+        const files: File[] = [];
+        for (const [index, item] of items.entries()) {
+          const type = item.types.find((type) => !type.startsWith("text/"));
+          if (!type) continue;
+          const blob = await item.getType(type);
+          const extension =
+            type === "image/jpeg"
+              ? "jpg"
+              : type.split("/")[1].replace(/[^a-z0-9]/gi, "") || "bin";
+          files.push(
+            new File([blob], `clipboard-${Date.now()}-${index}.${extension}`, {
+              type,
+            }),
+          );
+        }
+        if (files.length) {
+          await uploadFiles(files);
+          return;
+        }
+        const textItem = items.find((item) =>
+          item.types.includes("text/plain"),
+        );
+        if (textItem) {
+          const text = await (await textItem.getType("text/plain")).text();
+          if (mounted) t.paste(text);
+          return;
+        }
+      }
+      const text = await navigator.clipboard.readText();
+      if (mounted) t.paste(text);
     } catch {
-      pasteText = "";
-      pasteOpen = true;
+      if (mounted) {
+        pasteText = "";
+        pasteOpen = true;
+      }
     }
   }
   async function focusTerminal(event: Event) {
@@ -182,6 +320,28 @@
       {#if fullscreen}<IconMinimize class="size-4" />
       {:else}<IconMaximize class="size-4" />{/if}
     </Button>
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label="上传文件"
+      title="上传文件"
+      disabled={upload !== null ||
+        t.connection !== "connected" ||
+        t.exitCode !== null}
+      onclick={() => fileInput.click()}
+      ><IconUpload class="size-4" aria-hidden="true" /></Button
+    >
+    <input
+      bind:this={fileInput}
+      type="file"
+      class="hidden"
+      aria-label="选择上传文件"
+      onchange={() => {
+        const files = Array.from(fileInput.files ?? []);
+        fileInput.value = "";
+        void uploadFiles(files);
+      }}
+    />
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props })}<Button
@@ -222,6 +382,32 @@
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   </header>
+  {#if upload}
+    <div
+      class="shrink-0 space-y-1 border-b bg-muted px-3 py-2"
+      aria-label="文件上传状态"
+    >
+      <div class="flex items-center gap-3 text-xs" role="status">
+        <span class="min-w-0 flex-1 truncate"
+          >正在上传 {upload.name}{upload.total > 1
+            ? `（${upload.index}/${upload.total}）`
+            : ""}</span
+        >
+        <span>{upload.percent}%</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onclick={() => uploadController?.abort()}>取消</Button
+        >
+      </div>
+      <progress
+        aria-label="文件上传进度"
+        max={100}
+        value={upload.percent}
+        class="block h-1 w-full accent-primary"
+      ></progress>
+    </div>
+  {/if}
   {#if error || t.error}<p
       role="alert"
       class="shrink-0 bg-destructive/10 px-4 py-2 text-sm text-destructive"
@@ -255,6 +441,16 @@
   {/if}
   <div class="terminal-area">
     <div class="terminal-host" bind:this={container}></div>
+    {#if dragging}
+      <div
+        class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary bg-background/90"
+        role="status"
+      >
+        <p class="text-sm">
+          {upload ? "请等待当前上传完成" : "松开以上传文件到临时目录"}
+        </p>
+      </div>
+    {/if}
     {#if t.selection}
       <div
         class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
@@ -295,6 +491,7 @@
     >
     <Textarea
       aria-label="粘贴内容"
+      onpaste={filePaste}
       bind:value={pasteText}
       class="min-h-40 font-mono"
       autocapitalize="off"

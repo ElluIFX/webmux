@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { ErrorSchema, RecentDirsSchema, TextSettingSchema } from "./schemas";
+import {
+  ErrorSchema,
+  RecentDirsSchema,
+  TextSettingSchema,
+  UploadSchema,
+} from "./schemas";
 
 export class APIError extends Error {
   constructor(
@@ -25,6 +30,12 @@ export function store(key: string, value: string) {
     /* private-mode storage is optional */
   }
 }
+function responseError(status: number, body: unknown, fallback: string) {
+  const detail = ErrorSchema.safeParse(body);
+  if (status === 401) window.dispatchEvent(new Event("webmux:auth"));
+  return new APIError(status, detail.success ? detail.data.error : fallback);
+}
+
 async function request(
   path: string,
   method = "GET",
@@ -38,16 +49,12 @@ async function request(
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!response.ok) {
-    const detail = ErrorSchema.safeParse(
-      await response.json().catch(() => null),
-    );
-    if (response.status === 401) window.dispatchEvent(new Event("webmux:auth"));
-    throw new APIError(
+  if (!response.ok)
+    throw responseError(
       response.status,
-      detail.success ? detail.data.error : response.statusText,
+      await response.json().catch(() => null),
+      response.statusText,
     );
-  }
   return response;
 }
 export async function api<T extends z.ZodType>(
@@ -65,6 +72,59 @@ export async function apiBuffer(id: string): Promise<Uint8Array> {
   return new Uint8Array(
     await (await request(`/sessions/${id}/buffer`)).arrayBuffer(),
   );
+}
+// XHR exposes upload progress; fetch does not. Authentication and errors stay
+// shared with the JSON transport, and multipart boundaries belong to the browser.
+export function uploadFile(
+  id: string,
+  file: File,
+  progress: (percent: number) => void,
+  signal: AbortSignal,
+): Promise<z.infer<typeof UploadSchema>> {
+  const { promise, resolve, reject } =
+    Promise.withResolvers<z.infer<typeof UploadSchema>>();
+  if (signal.aborted) {
+    reject(new DOMException("上传已取消", "AbortError"));
+    return promise;
+  }
+  const xhr = new XMLHttpRequest();
+  const abort = () => xhr.abort();
+  const cleanup = () => signal.removeEventListener("abort", abort);
+  xhr.open("POST", `/api/sessions/${id}/upload`);
+  xhr.setRequestHeader("Authorization", "Bearer " + stored("token"));
+  xhr.responseType = "json";
+  xhr.timeout = 5 * 60 * 1000;
+  xhr.upload.onprogress = (event) => {
+    if (event.lengthComputable)
+      progress(Math.round((event.loaded / event.total) * 100));
+  };
+  xhr.onload = () => {
+    cleanup();
+    try {
+      if (xhr.status < 200 || xhr.status >= 300)
+        throw responseError(xhr.status, xhr.response, xhr.statusText);
+      resolve(UploadSchema.parse(xhr.response));
+    } catch (err) {
+      reject(err);
+    }
+  };
+  xhr.onerror = () => {
+    cleanup();
+    reject(new APIError(0, "上传失败：网络连接异常"));
+  };
+  xhr.ontimeout = () => {
+    cleanup();
+    reject(new APIError(0, "上传超时"));
+  };
+  xhr.onabort = () => {
+    cleanup();
+    reject(new DOMException("上传已取消", "AbortError"));
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  const form = new FormData();
+  form.append("file", file);
+  xhr.send(form);
+  return promise;
 }
 export function navigate(path: string) {
   history.pushState(null, "", path);
