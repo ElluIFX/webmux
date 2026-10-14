@@ -180,6 +180,28 @@ Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** 
 
 shadcn 配置位于 `web/components.json`，生成的基础组件位于 `web/src/lib/components/ui/`；业务组件只组合这些基础控件。增加库组件使用 `pnpm --dir web exec shadcn-svelte add <组件名>`，随后 `make format`。不要重新引入旧前端框架或手写替代基础弹层 / 菜单。
 
+### OpenSpec
+
+项目已按 [OpenSpec 官方初始化流程](https://openspec.dev/docs/setup) 接入 **1.13.0**，使用默认 `spec-driven` schema 和 core 工作流。CLI 是开发工具，不加入前端运行依赖；其他开发机器安装：
+
+```sh
+npm install -g @fission-ai/openspec@1.13.0
+openspec --version
+openspec list
+```
+
+`openspec/config.yaml` 配置项目上下文，新建规格文档使用简体中文，结构标题与 SHALL / MUST 保持英文。`openspec/specs/` 保存规格，`openspec/changes/` 保存在途变更；现有 `README.md` 与 `WebMux.md` 不迁移或删除。
+
+在相应 AI 工具的聊天界面启动提案（不是终端命令）：
+
+| 工具           | 提案入口                         | 工作流文件                                  |
+| -------------- | -------------------------------- | ------------------------------------------- |
+| omp / Oh My Pi | `/opsx-propose "变更需求"`       | `.omp/skills/`、`.omp/commands/`            |
+| Claude Code    | `/opsx:propose "变更需求"`       | `.claude/skills/`、`.claude/commands/opsx/` |
+| Codex          | `$openspec-propose` 加上变更需求 | `.agents/skills/`                           |
+
+core 包含 explore、propose、apply、update、sync、archive 六个工作流。重启或重新加载 AI 工具以发现新命令；更新 CLI 后，在项目根目录运行 `openspec update` 刷新生成的工作流。验证已有规格和变更可运行 `openspec validate --all --strict --no-interactive`；刚初始化时尚无待验证内容。
+
 ## FAQ
 
 **创建失败，找不到 claude / codex？** 检查服务用户的 PATH；systemd 不会执行你的交互 shell 初始化文件。预设显示实际 argv，程序缺失不会被误报为目录不存在。
