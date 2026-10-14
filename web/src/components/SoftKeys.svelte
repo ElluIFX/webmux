@@ -15,7 +15,6 @@
     paste: () => void;
     keyboard: () => void;
   } = $props();
-  let collapsed = $state(false);
   const symbols = ["/", "@"] as const;
   const keys = [
     ["Esc", "\x1b"],
@@ -40,68 +39,55 @@
 </script>
 
 <aside class="soft-keys shrink-0 border-t bg-card" aria-label="终端软键">
-  {#if !collapsed}
-    <div class="soft-row">
+  <div class="soft-row">
+    <Button
+      variant="outline"
+      size="sm"
+      aria-label="唤起或收起键盘"
+      onpointerdown={keepFocus}
+      onclick={keyboard}>⌨</Button
+    >
+    <Button
+      variant="outline"
+      size="sm"
+      onpointerdown={keepFocus}
+      onclick={paste}>粘贴</Button
+    >
+    {#each symbols as symbol (symbol)}
       <Button
         variant="outline"
         size="sm"
-        aria-label="唤起或收起键盘"
         onpointerdown={keepFocus}
-        onclick={keyboard}>⌨</Button
+        onclick={() => send(symbol)}>{symbol}</Button
       >
-      <Button
+    {/each}
+    {#each keys.slice(0, 2) as [label, input] (label)}<Button
         variant="outline"
         size="sm"
         onpointerdown={keepFocus}
-        onclick={paste}>粘贴</Button
+        onclick={() => send(input)}>{label}</Button
+      >{/each}
+    {#each ["ctrl", "alt"] as key (key)}
+      <Button
+        variant={modifiers[key as keyof Modifiers] ? "default" : "outline"}
+        size="sm"
+        aria-pressed={modifiers[key as keyof Modifiers]}
+        onpointerdown={keepFocus}
+        onclick={() => toggle(key as keyof Modifiers)}
+        >{key === "ctrl" ? "Ctrl" : "Alt"}</Button
       >
-      {#each symbols as symbol (symbol)}
-        <Button
-          variant="outline"
-          size="sm"
-          onpointerdown={keepFocus}
-          onclick={() => send(symbol)}>{symbol}</Button
-        >
-      {/each}
-      {#each keys.slice(0, 2) as [label, input] (label)}<Button
-          variant="outline"
-          size="sm"
-          onpointerdown={keepFocus}
-          onclick={() => send(input)}>{label}</Button
-        >{/each}
-      {#each ["ctrl", "alt"] as key (key)}
-        <Button
-          variant={modifiers[key as keyof Modifiers] ? "default" : "outline"}
-          size="sm"
-          aria-pressed={modifiers[key as keyof Modifiers]}
-          onpointerdown={keepFocus}
-          onclick={() => toggle(key as keyof Modifiers)}
-          >{key === "ctrl" ? "Ctrl" : "Alt"}</Button
-        >
-      {/each}
-      {#each keys.slice(2) as [label, input] (label)}<Button
-          variant="outline"
-          size="sm"
-          onpointerdown={keepFocus}
-          onclick={() => send(input)}>{label}</Button
-        >{/each}
-      {#each combinations as [label, input] (label)}<Button
-          variant="outline"
-          size="sm"
-          onpointerdown={keepFocus}
-          onclick={() => send(input)}>{label}</Button
-        >{/each}
-    </div>
-  {/if}
-  <Button
-    variant="outline"
-    size="sm"
-    class="h-9 min-w-10 shrink-0"
-    aria-label={collapsed ? "展开软键栏" : "折叠软键栏"}
-    aria-expanded={!collapsed}
-    onpointerdown={keepFocus}
-    onclick={() => {
-      collapsed = !collapsed;
-    }}>{collapsed ? "⌃" : "⌄"}</Button
-  >
+    {/each}
+    {#each keys.slice(2) as [label, input] (label)}<Button
+        variant="outline"
+        size="sm"
+        onpointerdown={keepFocus}
+        onclick={() => send(input)}>{label}</Button
+      >{/each}
+    {#each combinations as [label, input] (label)}<Button
+        variant="outline"
+        size="sm"
+        onpointerdown={keepFocus}
+        onclick={() => send(input)}>{label}</Button
+      >{/each}
+  </div>
 </aside>

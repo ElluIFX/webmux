@@ -227,7 +227,6 @@
 }
 .soft-keys {
   display: none;
-  gap: 0.35rem;
   align-items: center;
   padding: 0.25rem 0.5rem 0.5rem;
 }

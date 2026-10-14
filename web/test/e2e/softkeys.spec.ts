@@ -20,12 +20,10 @@ test("mobile soft keys stay in one row with paste visible and all keys reachable
   const bar = page.getByRole("complementary", { name: "终端软键" });
   const paste = bar.getByRole("button", { name: "粘贴", exact: true });
   const keyboard = bar.getByRole("button", { name: "唤起或收起键盘" });
-  const collapse = bar.getByRole("button", { name: "折叠软键栏" });
   for (const width of [320, 390, 844]) {
     await page.setViewportSize({ width, height: 844 });
     await expect(paste).toBeInViewport({ ratio: 1 });
     await expect(keyboard).toBeInViewport({ ratio: 1 });
-    await expect(collapse).toBeInViewport({ ratio: 1 });
     const layout = await bar.evaluate((element) => {
       const buttons = [...element.querySelectorAll("button")].map((button) =>
         button.getBoundingClientRect(),
@@ -40,7 +38,7 @@ test("mobile soft keys stay in one row with paste visible and all keys reachable
     });
     expect(
       layout.verticalSpread,
-      "All keys and the collapse control share one row",
+      "All soft keys share one row",
     ).toBeLessThanOrEqual(1);
     expect(
       layout.height,
@@ -55,10 +53,7 @@ test("mobile soft keys stay in one row with paste visible and all keys reachable
   await expect(
     bar.getByRole("button", { name: "Ctrl+R", exact: true }),
   ).toBeInViewport({ ratio: 1 });
-  await expect(collapse).toBeInViewport({ ratio: 1 });
-  await collapse.click();
-  await expect(paste).toBeHidden();
-  await bar.getByRole("button", { name: "展开软键栏" }).click();
+  await paste.scrollIntoViewIfNeeded();
   await expect(paste).toBeInViewport({ ratio: 1 });
   await keyboard.click();
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();

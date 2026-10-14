@@ -96,7 +96,7 @@ WebMux 是一个运行在单台 Linux 机器上的 Go 单二进制 Web 终端服
 
 - **顶栏**（高度 44px）：返回按钮、会话 title、状态点、连接状态图标（已连接 / 重连中）、全屏 / 退出全屏按钮、右侧菜单（复制全部缓冲、清屏、关闭会话、字体大小）
 - **终端区**：xterm.js，占满剩余空间；横屏和竖屏自动根据容器尺寸 fit，并把新 cols/rows 发回服务端 `SIGWINCH`
-- **软键栏**（仅触摸设备显示，可折叠）：按使用频率优先排列 `⌨`（唤起/收起系统键盘）、`/`、`@`，随后为 `Esc` `Tab` `Ctrl` `Alt` `↑` `↓` `←` `→` `Home` `End` `PgUp` `PgDn` `粘贴`。`Ctrl` 和 `Alt` 为粘滞键：点一下后下一个按键带修饰符，再点取消
+- **软键栏**（仅触摸设备显示，始终保持单行）：按使用频率优先排列 `⌨`（唤起/收起系统键盘）、`粘贴`、`/`、`@`，随后为 `Esc` `Tab` `Ctrl` `Alt` `↑` `↓` `←` `→` `Home` `End` `PgUp` `PgDn`。`Ctrl` 和 `Alt` 为粘滞键：点一下后下一个按键带修饰符，再点取消
 - 常用组合单独给按钮：`Ctrl+C`、`Ctrl+D`、`Ctrl+Z`、`Ctrl+L`、`Ctrl+R`，一行放不下时横向滚动
 
 终端页交互细节：
@@ -409,16 +409,16 @@ WebGL 渲染需要浏览器报告的实际像素尺寸与 CSS 尺寸 × DPR 一�
 
 这是产品能否真正用起来的关键，按以下规则实现：
 
-- **布局**：`height: 100dvh` 的 flex 列：顶栏 44px、终端 `flex: 1; min-height: 0`、软键栏 44px；safe-area 用 `env(safe-area-inset-*)` 补 padding
+- **布局**：`height: 100dvh` 的 flex 列：顶栏 44px、终端 `flex: 1; min-height: 0`、单行软键栏约 49px（含 36px 按键、边框及内边距）；safe-area 用 `env(safe-area-inset-*)` 补 padding
 - **全屏**：顶部菜单旁通过 `document.documentElement.requestFullscreen({navigationUI: "hide"})` 请求浏览器原生全屏，使用 `document.exitFullscreen()` 退出；对整个文档请求，确保 body 下的菜单 / Dialog portals 仍可见。监听 `fullscreenchange` 同步状态，阻止重复请求，离开终端页退出本页开启的全屏。平台不支持或拒绝请求时给出明确提示，不用 CSS 伪装成功；原生浏览器底栏能否隐藏由浏览器决定，可尝试主屏幕 standalone 模式。
 - **键盘弹出**：监听 `window.visualViewport` 的 `resize`，把根容器高度设为 `visualViewport.height`，并 `fit()`；iOS Safari 弹键盘时页面可能被整体推上去，需要在 resize 回调里 `window.scrollTo(0,0)`
 - **输入法**：xterm.js 自带的隐藏 textarea 在手机上行为正常，但要设置 `term.textarea.setAttribute('autocapitalize','off')`、`autocorrect=off`、`spellcheck=false`，否则 iOS 会自动大写首字母、把 `--` 换成破折号
 - **唤起键盘**：点击终端区域 `term.focus()`；软键栏的 `⌨` 按钮在已聚焦时 `term.blur()` 收起键盘
-- **软键栏**：键盘按钮置于第一行最左侧，随后为 `/` 和 `@` 快捷输入。按钮 `onPointerDown` 时 `preventDefault()` 防止终端失焦导致键盘收起；`/`、`@` 作为普通字符发送，控制字节：`Esc`=`\x1b`，`Tab`=`\t`，方向键=`\x1b[A/B/C/D`，`Home`=`\x1b[H`，`End`=`\x1b[F`，`PgUp`=`\x1b[5~`，`PgDn`=`\x1b[6~`；`Ctrl` 粘滞后下一个字母 `c` 发送 `c.charCodeAt(0) & 0x1f`；`Alt` 粘滞后发送 `\x1b` + 字母
+- **软键栏**：键盘按钮置于单行最左侧，随后为粘贴、`/` 和 `@` 快捷输入。全部按键共用一行横向滚动区域，不提供收起按钮。按钮 `onPointerDown` 时 `preventDefault()` 防止终端失焦导致键盘收起；`/`、`@` 作为普通字符发送，控制字节：`Esc`=`\x1b`，`Tab`=`\t`，方向键=`\x1b[A/B/C/D`，`Home`=`\x1b[H`，`End`=`\x1b[F`，`PgUp`=`\x1b[5~`，`PgDn`=`\x1b[6~`；`Ctrl` 粘滞后下一个字母 `c` 发送 `c.charCodeAt(0) & 0x1f`；`Alt` 粘滞后发送 `\x1b` + 字母
 - **粘贴**：`navigator.clipboard.readText()` 需要 HTTPS 或 localhost，Tailscale 下常是 HTTP，因此粘贴按钮回退方案是弹出一个 textarea 让用户粘贴后点“发送”；多行内容用 bracketed paste（`\x1b[200~` … `\x1b[201~`）包裹，Claude Code 能正确识别
 - **滚动**：仅在终端区域设置 `touch-action: none`，避免浏览器原生滚动接管手势。用 Pointer Events 跟踪触摸指针，并捕获到稳定容器，避免 DOM 渲染器替换起始行节点后丢失后续事件。按实际行高累计单指移动，将整行位移转换成标准 `WheelEvent`，由 xterm 决定历史滚动、鼠标协议或备用屏光标键输入；滚轮坐标固定为手势起点。阻止 xterm 原生 TouchEvent 重复处理。抬起、取消、丢失捕获及卸载时释放状态与捕获；滑动结束不聚焦键盘，轻点可聚焦。
 - **字体缩放**：两条触摸指针移动时按距离变化调整字体（12–20），由 `setFontSize()` 更新、fit 并存 localStorage；指针数量变化时重新记录距离、位置及位移余数，避免双指结束后剩余单指造成滚屏跳动。
-- **横屏**：无特殊处理，`fit()` 自动适应；软键栏在横屏时可折叠为一个小把手以节省空间
+- **横屏**：无特殊处理，`fit()` 自动适应；软键栏仍保持单行，按键横向滚动
 - **桌面端**：默认隐藏软键栏，仅 `@media (pointer: coarse)` 显示；`Ctrl+Shift+C/V` 复制粘贴，其余与普通终端一致
 
 ### 7.5 主题与样式
