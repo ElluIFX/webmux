@@ -112,7 +112,7 @@ WebMux 不内置 TLS。需要安全上下文与系统剪贴板 API 时，可用 
 
 ### 移动端
 
-VisualViewport 跟随键盘高度与安全区域，横竖屏自动 fit；支持触摸历史滚动、双指字体缩放（12–20 px）、可折叠软键栏。Ctrl / Alt 为一次性修饰键。终端输入禁用自动大写、拼写检查与自动纠正。常用 Ctrl+C/D/Z/L/R、Esc、Tab、方向、Home/End、PgUp/PgDn 都有按钮。
+VisualViewport 跟随键盘高度与安全区域，横竖屏自动 fit；支持单指滚动、双指字体缩放（12–20 px）、可折叠软键栏。单指向下滑查看更早内容，向上滑查看后续内容：普通终端滚动历史，omp 等全屏面板按应用启用的鼠标 / 光标键模式处理滚轮。指针捕获到稳定容器，应用重绘行节点不会中断手势；滑动或缩放不会唤起键盘，轻点仍可聚焦。双指变单指、取消手势时重新建立基线，避免跳动。Ctrl / Alt 为一次性修饰键。终端输入禁用自动大写、拼写检查与自动纠正。常用 Ctrl+C/D/Z/L/R、Esc、Tab、方向、Home/End、PgUp/PgDn 都有按钮。
 
 HTTP 私网通常无法读 Clipboard API：点“粘贴”后在输入框粘贴并“发送”。xterm 的 paste API 遵循应用启用的 bracketed paste 模式：Bash / Claude 开启时多行文本不会被逐行误提交。桌面使用 Ctrl+Shift+C/V；复制全部在剪贴板不可用时提供可选中文本。
 
@@ -157,7 +157,7 @@ make format
 make check
 ```
 
-组件测试使用 Vitest Browser、Playwright Chromium 与真实 Svelte / Tailwind / xterm 渲染，不依赖正在运行的后端。首次运行前执行 `pnpm --dir web exec playwright install chromium`；Linux 若缺少浏览器系统库，可按 Playwright 提示安装。目录选择器测试覆盖长列表滚动、拖动条可见性、间距、小屏布局、键盘导航、显式确认、隐藏目录、错误恢复和过期响应；终端测试覆盖 DPR / 实际像素尺寸不一致时的可视回退与历史保留、正常像素取整、WebGL 不可用与上下文丢失、输入及卸载清理。
+组件测试使用 Vitest Browser、Playwright Chromium 与真实 Svelte / Tailwind / xterm 渲染，不依赖正在运行的后端。首次运行前执行 `pnpm --dir web exec playwright install chromium`；Linux 若缺少浏览器系统库，可按 Playwright 提示安装。目录选择器测试覆盖长列表滚动、拖动条可见性、间距、小屏布局、键盘导航、显式确认、隐藏目录、错误恢复和过期响应；终端测试覆盖 DPR / 实际像素尺寸不一致时的可视回退与历史保留、正常像素取整、WebGL 不可用与上下文丢失、输入及卸载清理。触摸回归通过 Chromium CDP 真实手势验证历史滚动、重绘期间指针捕获与全屏滚轮协议，并覆盖双指转单指、取消和聚焦行为。
 
 Vite 使用 `127.0.0.1:5173`，代理到 `127.0.0.1:7681`。**开发配置需** `allowed_origins = ["http://127.0.0.1:5173"]`，否则带 Origin 的写请求会被拒绝。生产不需要开发 Origin。
 

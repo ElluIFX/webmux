@@ -18,6 +18,7 @@
 
 <div
   bind:this={container}
+  class="terminal-host"
   data-testid="terminal-host"
   style="position: fixed; left: 0; top: 0; width: 400px; height: 750px"
 ></div>

@@ -196,7 +196,7 @@
 .terminal-host {
   position: absolute;
   inset: 8px 4px 4px 8px;
-  touch-action: pan-y;
+  touch-action: none;
   overflow: hidden;
 }
 .terminal-host .xterm {

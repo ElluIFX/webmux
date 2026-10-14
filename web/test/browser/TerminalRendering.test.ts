@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { commands, page, userEvent } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-svelte/pure";
 import Harness from "./TerminalHarness.svelte";
 
+declare module "vitest/internal/browser" {
+  interface BrowserCommands {
+    /** Real finger, iframe-local CSS points; release or cancel after the last. */
+    nativeTouchGesture(
+      points: { x: number; y: number }[],
+      finish?: "end" | "cancel",
+    ): Promise<void>;
+  }
+}
 // Exercise the real transport framing, hook, xterm buffer and both renderers.
 // This socket never opens a network connection or supplies a synthetic echo.
 class FixtureSocket extends EventTarget {
@@ -63,6 +72,8 @@ let webglCanvases: WeakSet<HTMLCanvasElement>;
 let resizeListeners: Set<EventListenerOrEventListenerObject>;
 const nativeResizeObserver = window.ResizeObserver;
 const nativeMatchMedia = window.matchMedia.bind(window);
+let previousFont: string | null;
+let touchTeardowns: (() => void)[];
 
 // Chromium's device emulator can change DPR without changing the actual
 // physical-pixel observations. Only that browser API boundary is controlled;
@@ -335,8 +346,118 @@ function expectNoSessionMutation(socket: FixtureSocket) {
   expect(socket.sent.every((frame) => frame[0] === 1)).toBe(true);
 }
 
+function inputText(socket: FixtureSocket) {
+  return socket.sent
+    .filter((frame) => frame[0] === 0)
+    .map((frame) => new TextDecoder().decode(frame.subarray(1)))
+    .join("");
+}
+
+function geometry(socket: FixtureSocket) {
+  const resize = socket.sent.filter((frame) => frame[0] === 1).at(-1)!;
+  const { cols, rows } = JSON.parse(
+    new TextDecoder().decode(resize.subarray(1)),
+  ) as { cols: number; rows: number };
+  const bounds = host().querySelector(".xterm-screen")!.getBoundingClientRect();
+  return {
+    row: bounds.height / rows,
+    cell: bounds.width / cols,
+    bounds,
+  };
+}
+
+function gestureStart(socket: FixtureSocket, column = 8, row = 12) {
+  const { bounds, cell, row: height } = geometry(socket);
+  return {
+    x: bounds.left + (column - 0.5) * cell,
+    y: bounds.top + (row - 0.5) * height,
+  };
+}
+
+async function swipe(
+  socket: FixtureSocket,
+  lines: number,
+  start = gestureStart(socket),
+  horizontal = 0,
+) {
+  const height = geometry(socket).row;
+  const steps = 8;
+  await commands.nativeTouchGesture(
+    Array.from({ length: steps + 1 }, (_, index) => ({
+      x: start.x + (horizontal * index) / steps,
+      y: start.y + (lines * height * index) / steps,
+    })),
+  );
+}
+
+function historyLine(line: number) {
+  return `history-${String(line).padStart(4, "0")}`;
+}
+
+function firstHistoryLine() {
+  const text = host().querySelector(".xterm-rows > div")?.textContent ?? "";
+  return Number(/history-(\d+)/.exec(text)?.[1] ?? NaN);
+}
+
+async function populateHistory(socket: FixtureSocket) {
+  // More than three viewports: assertions read the actual visible DOM renderer.
+  socket.receive(
+    1,
+    Array.from({ length: 160 }, (_, index) => historyLine(index + 1)).join(
+      "\r\n",
+    ),
+  );
+  await expectDomText(historyLine(160));
+  expect(firstHistoryLine()).toBeGreaterThan(1);
+  return firstHistoryLine();
+}
+
+function blurAndTrackFocus() {
+  const textarea = host().querySelector<HTMLTextAreaElement>(
+    ".xterm-helper-textarea",
+  )!;
+  textarea.blur();
+  const focused = vi.fn();
+  textarea.addEventListener("focus", focused);
+  touchTeardowns.push(() => textarea.removeEventListener("focus", focused));
+  return { textarea, focused };
+}
+
+function pointer(
+  target: HTMLElement,
+  type: string,
+  id: number,
+  point: { x: number; y: number },
+) {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerType: "touch",
+      pointerId: id,
+      clientX: point.x,
+      clientY: point.y,
+      buttons: type === "pointerup" ? 0 : 1,
+    }),
+  );
+}
+
+function syntheticPointerCapture(target: HTMLElement) {
+  // Synthetic pointer ids cannot be captured by Chromium. Only that browser
+  // boundary is replaced; the real hook, fit, rendering and xterm protocol run.
+  return {
+    set: vi.spyOn(target, "setPointerCapture").mockImplementation(() => {}),
+    release: vi
+      .spyOn(target, "releasePointerCapture")
+      .mockImplementation(() => {}),
+  };
+}
+
 beforeEach(async () => {
   sockets = [];
+  previousFont = localStorage.getItem("webmux.fontSize");
+  localStorage.setItem("webmux.fontSize", "14");
+  touchTeardowns = [];
   observations = [];
   resolutionQueries = [];
   resizeListeners = new Set();
@@ -389,6 +510,9 @@ afterEach(async () => {
       sockets.map(() => 1),
     );
   } finally {
+    for (const teardown of touchTeardowns) teardown();
+    if (previousFont === null) localStorage.removeItem("webmux.fontSize");
+    else localStorage.setItem("webmux.fontSize", previousFont);
     for (const observer of observations) observer.native.disconnect();
     for (const query of resolutionQueries) {
       for (const listener of [...query.listeners])
@@ -533,3 +657,217 @@ test("real WebGL context loss falls back visibly without discarding existing his
   await expectDomText("output after real context loss");
   expectNoSessionMutation(socket);
 }, 15000);
+
+test("native Chrome swipes keep scrolling visibly through row redraws without keyboard, duplicate scroll or outer-page pan", async () => {
+  observeGlyphPixels(true);
+  const { socket } = await openTerminal();
+  const bottom = await populateHistory(socket);
+  const { textarea, focused } = blurAndTrackFocus();
+  const spacer = document.createElement("div");
+  spacer.style.height = "2000px";
+  document.body.append(spacer);
+  touchTeardowns.push(() => {
+    spacer.remove();
+    window.scrollTo(0, 0);
+  });
+  expect(document.documentElement.scrollHeight).toBeGreaterThan(innerHeight);
+  const outerY = scrollY;
+  const events: string[] = [];
+  const record = (event: Event) => {
+    if (event.isTrusted) events.push(event.type);
+  };
+  const types = ["pointermove", "pointerup", "pointercancel", "touchcancel"];
+  for (const type of types) document.addEventListener(type, record, true);
+  touchTeardowns.push(() => {
+    for (const type of types) document.removeEventListener(type, record, true);
+  });
+
+  const originalRow = host().querySelector(".xterm-rows > div > span")!;
+  await swipe(socket, 4.25);
+  await expect.poll(firstHistoryLine).toBe(bottom - 4);
+  await expectDomText(historyLine(bottom - 4));
+  // xterm replaces the hit-tested span during scroll. Pointer capture must keep
+  // receiving the rest of the real finger, including its final release.
+  expect(originalRow.isConnected).toBe(false);
+  expect(
+    events.filter((type) => type === "pointermove").length,
+  ).toBeGreaterThanOrEqual(7);
+  expect(events.filter((type) => type === "pointerup")).toHaveLength(1);
+  expect(events.filter((type) => type.endsWith("cancel"))).toEqual([]);
+
+  await swipe(socket, -4.25, gestureStart(socket, 8, 30));
+  await expect.poll(firstHistoryLine).toBe(bottom);
+  // A fresh gesture must discard the previous quarter-row remainder.
+  await swipe(socket, 0.8);
+  expect(firstHistoryLine()).toBe(bottom);
+  for (let index = 0; index < Math.ceil(bottom / 20); index++) {
+    await swipe(socket, 20.25, gestureStart(socket, 8, 6));
+  }
+  await expect.poll(firstHistoryLine).toBe(1);
+  await expectDomText(historyLine(1));
+  await swipe(socket, 8.25);
+  expect(firstHistoryLine()).toBe(1);
+  for (let index = 0; index < Math.ceil(bottom / 20); index++) {
+    await swipe(socket, -20.25, gestureStart(socket, 8, 30));
+  }
+  await expect.poll(firstHistoryLine).toBe(bottom);
+  await expectDomText(historyLine(160));
+  await swipe(socket, -8.25, gestureStart(socket, 8, 30));
+  expect(firstHistoryLine()).toBe(bottom);
+  expect(scrollY).toBe(outerY);
+  expect(events.filter((type) => type.endsWith("cancel"))).toEqual([]);
+  expect(document.activeElement).not.toBe(textarea);
+  expect(focused).not.toHaveBeenCalled();
+  expectNoSessionMutation(socket);
+}, 20000);
+
+test("native fullscreen gestures report row-scaled SGR wheel input at stable starting cells", async () => {
+  observeGlyphPixels(true);
+  const { socket } = await openTerminal();
+  socket.receive(0, "\x1b[?1049h\x1b[?1000h\x1b[?1006hmouse-ready");
+  await expectDomText("mouse-ready");
+  const { textarea, focused } = blurAndTrackFocus();
+  const start = gestureStart(socket, 8, 12);
+
+  // Horizontal finger drift and vertical row changes must not move the
+  // application's wheel anchor. Exact protocol equality excludes clicks,
+  // cursor arrows, malformed reports and duplicate xterm touch scrolling.
+  await swipe(socket, 3.25, start, geometry(socket).cell * 4);
+  expect(inputText(socket)).toBe("\x1b[<64;8;12M".repeat(3));
+  await swipe(socket, -6.25, start, -geometry(socket).cell * 4);
+  expect(inputText(socket)).toBe(
+    "\x1b[<64;8;12M".repeat(3) + "\x1b[<65;8;12M".repeat(6),
+  );
+  expect(document.activeElement).not.toBe(textarea);
+  expect(focused).not.toHaveBeenCalled();
+});
+
+test("native alternate-buffer wheel fallback honors cursor-key mode and normal-buffer restoration", async () => {
+  observeGlyphPixels(true);
+  const { socket } = await openTerminal();
+  const bottom = await populateHistory(socket);
+  const { focused } = blurAndTrackFocus();
+  socket.receive(0, "\x1b[?1049h\x1b[?1lalt-normal");
+  await expectDomText("alt-normal");
+  await swipe(socket, 2.25);
+  await swipe(socket, -3.25);
+  expect(inputText(socket)).toBe("\x1b[A".repeat(2) + "\x1b[B".repeat(3));
+
+  socket.receive(0, "\x1b[?1h\r\nalt-application");
+  await expectDomText("alt-application");
+  await swipe(socket, 4.25);
+  await swipe(socket, -2.25);
+  expect(inputText(socket)).toBe(
+    "\x1b[A".repeat(2) +
+      "\x1b[B".repeat(3) +
+      "\x1bOA".repeat(4) +
+      "\x1bOB".repeat(2),
+  );
+  const beforeRestore = inputText(socket);
+  socket.receive(0, "\x1b[?1049l");
+  await expectDomText(historyLine(160));
+  await swipe(socket, 5.25);
+  await expect.poll(firstHistoryLine).toBe(bottom - 5);
+  await expectDomText(historyLine(bottom - 5));
+  await swipe(socket, -5.25);
+  await expect.poll(firstHistoryLine).toBe(bottom);
+  expect(inputText(socket)).toBe(beforeRestore);
+  expect(focused).not.toHaveBeenCalled();
+});
+
+test("pinch resizes real cells and rebases one-finger scrolling, while cancel and capture loss discard ghost gestures", async () => {
+  observeGlyphPixels(true);
+  const { socket, rendered } = await openTerminal();
+  socket.receive(0, "\x1b[?1049h\x1b[?1000h\x1b[?1006hedge-ready");
+  await expectDomText("edge-ready");
+  const target = host();
+  const { textarea, focused } = blurAndTrackFocus();
+  const start = gestureStart(socket);
+  const originalHeight = geometry(socket).row;
+  await commands.nativeTouchGesture(
+    [start, { x: start.x, y: start.y + originalHeight * 0.8 }],
+    "cancel",
+  );
+  expect(inputText(socket)).toBe("");
+  expect(focused).not.toHaveBeenCalled();
+  const capture = syntheticPointerCapture(target);
+  pointer(target, "pointerdown", 1, start);
+  const first = { x: start.x, y: start.y + originalHeight * 0.8 };
+  pointer(target, "pointermove", 1, first);
+  pointer(target, "pointerdown", 2, { x: first.x + 100, y: first.y });
+  pointer(target, "pointermove", 2, { x: first.x + 130, y: first.y });
+  await expect.poll(() => geometry(socket).row).toBeGreaterThan(originalHeight);
+  await expectDomText("edge-ready");
+  expect(Number(localStorage.getItem("webmux.fontSize"))).toBeGreaterThan(14);
+  pointer(target, "pointerup", 2, { x: first.x + 130, y: first.y });
+  expect(inputText(socket)).toBe("");
+  const height = geometry(socket).row;
+  pointer(target, "pointermove", 1, { x: first.x, y: first.y + height * 0.6 });
+  expect(inputText(socket)).toBe("");
+  pointer(target, "pointermove", 1, { x: first.x, y: first.y + height * 1.2 });
+  expect(inputText(socket)).toMatch(/^\x1b\[<64;\d+;\d+M$/);
+  pointer(target, "pointerup", 1, { x: first.x, y: first.y + height * 1.2 });
+  expect(focused).not.toHaveBeenCalled();
+
+  for (const cancellation of ["pointercancel", "lostpointercapture"]) {
+    const before = inputText(socket);
+    const fresh = gestureStart(socket);
+    pointer(target, "pointerdown", 1, fresh);
+    pointer(target, "pointermove", 1, {
+      x: fresh.x,
+      y: fresh.y + height * 0.8,
+    });
+    pointer(target, cancellation, 1, fresh);
+    pointer(target, "pointermove", 1, { x: fresh.x, y: fresh.y + height * 12 });
+    pointer(target, "pointerup", 1, fresh);
+    expect(inputText(socket)).toBe(before);
+    expect(focused).not.toHaveBeenCalled();
+
+    pointer(target, "pointerdown", 1, fresh);
+    pointer(target, "pointermove", 1, {
+      x: fresh.x,
+      y: fresh.y + height * 0.4,
+    });
+    expect(inputText(socket)).toBe(before);
+    pointer(target, "pointermove", 1, {
+      x: fresh.x,
+      y: fresh.y + height * 1.2,
+    });
+    pointer(target, "pointerup", 1, fresh);
+    expect(inputText(socket).slice(before.length)).toMatch(
+      /^\x1b\[<64;\d+;\d+M$/,
+    );
+  }
+
+  expect(focused).not.toHaveBeenCalled();
+  expect(document.activeElement).not.toBe(textarea);
+  capture.set.mockRestore();
+  capture.release.mockRestore();
+  socket.receive(0, "\x1b[?1000l\x1b[?1006l\x1b[?1049l");
+  await expectDomText(prompt);
+  const beforeTap = inputText(socket);
+  await commands.nativeTouchGesture([gestureStart(socket)]);
+  expect(document.activeElement).toBe(textarea);
+  expect(focused).toHaveBeenCalledTimes(1);
+  expect(inputText(socket)).toBe(beforeTap);
+  syntheticPointerCapture(target);
+
+  // A live gesture disposed before its release must not keep any socket or
+  // focus effects attached to the old host, even with queued late events.
+  pointer(target, "pointerdown", 1, start);
+  await rendered.unmount();
+  const sent = socket.sent.length;
+  for (const type of [
+    "pointermove",
+    "pointercancel",
+    "pointerup",
+    "lostpointercapture",
+  ]) {
+    pointer(target, type, 1, { x: start.x, y: start.y + height * 12 });
+  }
+  pointer(target, "pointerdown", 2, start);
+  pointer(target, "pointerup", 2, start);
+  expect(socket.sent).toHaveLength(sent);
+  expect(socket.closeCount).toBe(1);
+  expect(focused).toHaveBeenCalledTimes(1);
+});
