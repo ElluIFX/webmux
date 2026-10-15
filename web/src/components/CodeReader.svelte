@@ -21,10 +21,8 @@
   } from "@codemirror/view";
   import { openSearchPanel } from "@codemirror/search";
   import { codeReaderPanels, openGotoLine } from "../code-reader-panels";
-  import {
-    syntaxHighlighting,
-    defaultHighlightStyle,
-  } from "@codemirror/language";
+  import { syntaxHighlighting } from "@codemirror/language";
+  import { codeHighlightStyle } from "../code-highlight";
   import { Button } from "$lib/components/ui/button";
   import {
     IconListNumbers,
@@ -253,7 +251,7 @@
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
       codeReaderPanels(),
-      syntaxHighlighting(defaultHighlightStyle),
+      syntaxHighlighting(codeHighlightStyle),
       highlightActiveLine(),
       highlightSpecialChars(),
       EditorView.theme({
