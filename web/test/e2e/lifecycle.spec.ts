@@ -7,6 +7,128 @@ import {
   expectTerminalLine,
 } from "./fixtures";
 
+for (const initialization of ["connected", "font-pending"] as const) {
+  test(`top-left back restores the live list from a ${initialization} terminal`, async ({
+    page,
+    request,
+    workDir,
+  }) => {
+    const errors: string[] = [];
+    let opened = 0;
+    let closed = 0;
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("websocket", (socket) => {
+      const path = new URL(socket.url()).pathname;
+      if (path.startsWith("/ws/s/")) {
+        opened++;
+        socket.on("close", () => closed++);
+      }
+    });
+    if (initialization === "font-pending") {
+      // Hold the real font load until after leaving, exercising the delayed
+      // terminal mount without substituting terminal output or server frames.
+      await page.addInitScript(() => {
+        const load = document.fonts.load.bind(document.fonts);
+        const released = Promise.withResolvers<void>();
+        window.addEventListener(
+          "webmux:e2e-release-font",
+          () => released.resolve(),
+          { once: true },
+        );
+        document.fonts.load = (font, text) =>
+          released.promise.then(() => load(font, text));
+      });
+    }
+    const name = `Back navigation ${initialization}`;
+    const created = await request.post("/api/sessions", {
+      data: { cwd: workDir, preset: "shell", name },
+    });
+    expect(created.status()).toBe(201);
+    const { id } = await created.json();
+    await page.goto("/");
+    const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+    const session = page.getByRole("link", { name, exact: true });
+    await session.click();
+    const back = page.getByRole("button", {
+      name: "返回会话列表",
+      exact: true,
+    });
+    await expect(back).toBeVisible();
+    if (initialization === "connected") {
+      await expect(
+        page.locator(".terminal-header").getByRole("status"),
+      ).toHaveText("已连接");
+      await expect(page.locator(".restore-overlay")).toBeHidden();
+    } else {
+      await expect(page.locator(".xterm-helper-textarea")).toHaveCount(0);
+      expect(opened).toBe(0);
+    }
+
+    const returnToList = async () => {
+      await back.click();
+      await expect(page).toHaveURL(/\/$/);
+      await expect(page.locator("header")).toContainText("本机在线");
+      await expect(
+        page.getByLabel("正在加载会话", { exact: true }),
+      ).toBeHidden();
+      await expect(session).toBeVisible();
+      const create = page
+        .locator("header")
+        .getByRole("button", { name: "＋ 新建会话", exact: true });
+      await expect(create).toBeEnabled();
+      await create.click();
+      await expect(
+        page.getByRole("button", { name: "Shell", exact: true }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "取消", exact: true }).click();
+      await page
+        .getByRole("button", { name: `会话菜单 ${name}`, exact: true })
+        .click();
+      await expect(
+        page.getByRole("menuitem", { name: "关闭会话", exact: true }),
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect.poll(() => closed).toBe(opened);
+      await expect
+        .poll(async () => {
+          const response = await request.get(`/api/sessions/${id}`);
+          const current = await response.json();
+          expect(current.status).not.toBe("exited");
+          return current.clients;
+        })
+        .toBe(0);
+      expect(await page.evaluate(() => performance.timeOrigin)).toBe(
+        timeOrigin,
+      );
+      expect(errors).toEqual([]);
+    };
+    await returnToList();
+    if (initialization === "font-pending") {
+      await page.evaluate(async () => {
+        window.dispatchEvent(new Event("webmux:e2e-release-font"));
+        await document.fonts.load('14px "Maple Mono NF CN"', "A");
+        const frame = Promise.withResolvers<void>();
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => frame.resolve()),
+        );
+        await frame.promise;
+      });
+      expect(opened).toBe(0);
+      await expect(page.locator(".xterm")).toHaveCount(0);
+    }
+
+    // Re-enter the same PTY, execute a real command, then exercise teardown again.
+    await session.click();
+    await expect(
+      page.locator(".terminal-header").getByRole("status"),
+    ).toHaveText("已连接");
+    await expect(page.locator(".restore-overlay")).toBeHidden();
+    await runCommand(page, "printf '\\n%s%s\\n' 'back-navigation-' 'alive'");
+    await expectTerminalLine(page, "back-navigation-alive");
+    await returnToList();
+  });
+}
+
 test("real shell output survives reload, then closes and is removed", async ({
   page,
   request,

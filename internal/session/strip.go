@@ -36,6 +36,11 @@ func (s *Preview) Resize(cols, rows uint16) string {
 	} else {
 		return s.text
 	}
+	// With zero scrollback, retained normal-buffer rows are all viewport rows.
+	// VT reflow can leave a phantom YBase after narrowing; the next height
+	// increase then pulls nonexistent history and leaves a nil viewport row.
+	normal := s.screen.Buffers().Normal()
+	normal.YBase, normal.YDisp = 0, 0
 	return s.snapshot()
 }
 

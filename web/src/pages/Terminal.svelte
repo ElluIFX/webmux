@@ -124,6 +124,8 @@
 
   onMount(() => {
     mounted = true;
+    // bind:this is cleared before onMount teardown; retain the listener owner.
+    const host = container;
     let foregroundFrame = 0;
     const visibilityChanged = () => {
       cancelAnimationFrame(foregroundFrame);
@@ -173,22 +175,22 @@
       dragging = false;
       void uploadFiles(Array.from(event.dataTransfer.files));
     };
-    container.addEventListener("paste", filePaste, true);
-    container.addEventListener("dragenter", dragEnter, true);
-    container.addEventListener("dragover", dragOver, true);
-    container.addEventListener("dragleave", dragLeave, true);
-    container.addEventListener("drop", drop, true);
+    host.addEventListener("paste", filePaste, true);
+    host.addEventListener("dragenter", dragEnter, true);
+    host.addEventListener("dragover", dragOver, true);
+    host.addEventListener("dragleave", dragLeave, true);
+    host.addEventListener("drop", drop, true);
     return () => {
       media.removeEventListener("change", layout);
       document.removeEventListener("visibilitychange", visibilityChanged);
       cancelAnimationFrame(foregroundFrame);
       mounted = false;
       uploadController?.abort();
-      container.removeEventListener("paste", filePaste, true);
-      container.removeEventListener("dragenter", dragEnter, true);
-      container.removeEventListener("dragover", dragOver, true);
-      container.removeEventListener("dragleave", dragLeave, true);
-      container.removeEventListener("drop", drop, true);
+      host.removeEventListener("paste", filePaste, true);
+      host.removeEventListener("dragenter", dragEnter, true);
+      host.removeEventListener("dragover", dragOver, true);
+      host.removeEventListener("dragleave", dragLeave, true);
+      host.removeEventListener("drop", drop, true);
       document.removeEventListener("fullscreenchange", changed);
       if (
         ownsFullscreen &&

@@ -171,3 +171,30 @@ func TestPreviewRetainsRowsForBrowserSelection(t *testing.T) {
 		t.Fatalf("status classification lost the bottom row: %q", p.last)
 	}
 }
+
+func TestPreviewNarrowThenGrowRetainsCompleteViewport(t *testing.T) {
+	for _, alternate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("alternate=%t", alternate), func(t *testing.T) {
+			var p Preview
+			p.Resize(8, 3)
+			p.Feed([]byte("abcdefgh\r\nx"))
+			if alternate {
+				p.Feed([]byte("\x1b[?1049hALT"))
+			}
+			p.Resize(2, 3)
+			p.Resize(2, 4)
+			if alternate {
+				p.Feed([]byte("\x1b[?1049l"))
+			}
+			// Visit the new bottom row through LF, not direct cursor addressing:
+			// the old reflow offset left this row unallocated and panicked here.
+			got := p.Feed([]byte("\x1b[H\n\n\nz"))
+			if want := "ef\ngh\nx\nz"; got != want {
+				t.Fatalf("resized viewport = %q, want %q", got, want)
+			}
+			if p.last != "z" {
+				t.Fatalf("latest status line = %q, want z", p.last)
+			}
+		})
+	}
+}
