@@ -7,6 +7,6 @@ context: |
   WebMux is a single-user Go HTTP/WebSocket service with persistent PTY sessions.
   The frontend uses Svelte 5, TypeScript, Vite, xterm.js, and shadcn-svelte.
   Use pnpm 12.11.2 for frontend dependencies.
-  README.md documents setup and tests; WebMux.md documents product behavior and protocol.
+  README.md and docs/ are overview documentation; do not add tasks to update them for every change.
   make test runs Go race tests, Vitest unit/browser tests, and Playwright E2E tests.
   Do not use existing developer terminal sessions for automated tests.

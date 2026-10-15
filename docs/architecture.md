@@ -1,0 +1,134 @@
+# 架构设计
+
+## 设计目标
+
+WebMux 是运行在单台 Linux / macOS 机器上的单用户 Web 终端。核心问题是：ttyd 一类工具在浏览器断开后会话即终止，手机锁屏、切网都会丢掉正在运行的 agent。WebMux 把 PTY 生命周期与浏览器连接解耦，会话由服务端持有，浏览器随时断开、随时重连。
+
+**非目标**
+
+- 多机网关、多用户或权限体系：以启动服务的系统用户身份运行。
+- 服务重启后的会话存活：会话只在内存中，重启即结束。
+- 进程沙箱：命令以服务用户身份执行，不做隔离。
+- 依赖或兼容 tmux。
+
+## 总体结构
+
+```mermaid
+flowchart LR
+  subgraph Browser["浏览器"]
+    L["会话列表页"]
+    T["终端页 xterm.js"]
+    C["代码工作区"]
+  end
+  subgraph Server["WebMux 进程"]
+    M["session.Manager"]
+    H["hub"]
+    S["Session"]
+    W["workspace 仓库清单 / Git"]
+    CV["codeview 只读代码服务"]
+  end
+  L -- "JSON /ws/sessions" --> M
+  T -- "二进制帧 /ws/s/{id}" --> H
+  C -- "REST /api" --> CV
+  H --> S
+  M --> S
+  L -- "REST /api/repositories" --> W
+  S -- PTY --> P["子进程: shell / claude / codex"]
+```
+
+浏览器断线后 Session 继续从 PTY 读取并写入环形缓冲；重连时先发送缓冲快照再续接实时流，因此断线期间的输出不会丢失。
+
+## 模块划分
+
+| 包                   | 职责                                                          |
+| -------------------- | ------------------------------------------------------------- |
+| `cmd/webmux`         | CLI 参数、配置加载、显式依赖注入、信号处理与优雅退出          |
+| `internal/config`    | TOML 解析、默认值与校验                                       |
+| `internal/session`   | PTY、环形缓冲、OSC 标题、屏幕预览、状态探测、进程树清理       |
+| `internal/hub`       | 终端 WebSocket：快照与订阅、输出合并、输入写入与取消          |
+| `internal/api`       | REST 路由、认证、Origin 检查、上传、静态资源与 SPA 回退       |
+| `internal/workspace` | 仓库清单持久化、Git worktree 查询 / 创建 / 删除、启动目录协调 |
+| `internal/codeview`  | 只读文件浏览、Git 修改列表、内容快照与变化检测                |
+| `web/`               | Svelte 5 前端，构建后通过 `go:embed` 嵌入二进制               |
+
+`cmd/webmux` 先加载配置，再构造 `session.Manager`、workspace 与 codeview 服务，最后注入 `api.New`。各模块通过构造函数显式依赖，不使用全局状态。
+
+## 关键设计原则
+
+- **会话与连接解耦**：Session 的生命周期只由子进程决定；WebSocket 连接只是观察者，可以有零个或多个。
+- **服务端只传字节**：PTY 原始字节直接进入缓冲并转发给 xterm.js，服务端不做终端仿真；OSC 标题与屏幕预览只是旁路解析。
+- **重连 = 清屏 + 全量回放 + 续流**：不做增量同步，简单且一致，由缓冲上限控制回放成本。
+- **会话只在内存中**：无数据库；只有显式登记的仓库清单写入状态目录，Git 自己持有 worktree 与分支状态。
+- **最后 resize 生效**：多端同时附着时，最近一次发送 resize 的客户端决定 PTY 尺寸。
+
+## 会话生命周期
+
+1. **创建**：校验并规范化 cwd，组装 argv（预设 argv + 追加参数，或 `custom` 的完整 argv），设置 `TERM=xterm-256color`、`COLORTERM=truecolor` 和 `WEBMUX_SESSION_ID`，在新会话（`setsid`）中启动 PTY。
+2. **运行**：reader 循环读取 PTY → 写入环形缓冲 → 更新 OSC 标题与屏幕预览 → 广播给订阅者。
+3. **退出**：子进程结束后先清理残留子进程、排空 PTY，再发布退出事件，保证退出帧之前的输出完整。
+4. **关闭**：向进程组发送 SIGHUP，5 秒后 SIGKILL。按会话 ID 与进程树查找其他 job-control 进程组；Linux 另按继承的 `WEBMUX_SESSION_ID` 查找，并通过 subreaper 回收孤儿进程。
+5. **移除**：只允许移除已退出的会话。
+
+服务收到 SIGTERM 时关闭所有会话，等待最多 10 秒后退出。
+
+## 环形缓冲与回放
+
+缓冲按**字节**而非行存储（默认 2 MiB），写满后覆盖最旧数据。agent 输出大量使用光标移动和重绘（spinner、进度条、TUI），按行截断会破坏转义序列；按字节回放由 xterm.js 重新解释最为稳妥。代价是最旧数据可能从转义序列中间开始，首行偶有乱码。
+
+快照捕获与订阅注册在同一把锁内完成，保证回放与实时流之间没有缺口。
+
+## 屏幕预览与标题
+
+- **OSC 标题**：增量状态机识别 `ESC ] 0/2 ; text BEL|ST`，支持跨读取块拼接，最多累积 512 字节。
+- **屏幕预览**：使用 `github.com/0magnet/xterm-go/vt` 只读跟踪当前屏幕（零 scrollback），提取底部最多 100 条非空行，每行最多 120 个字符。预览解析器从不向 PTY 写入，也不改写原始字节流。
+
+## 状态探测
+
+每 500 ms 评估一次，进程表每秒刷新：
+
+```text
+if exited                                   → exited
+else if 最近 2 秒有输出                      → running
+else if 末行匹配提示符 || 进程树全部睡眠      → waiting
+else if 超过 idle_after_seconds 无输出       → idle
+else                                        → waiting
+```
+
+进程树检查在 Linux 读取 `/proc/*/stat`，在 macOS 使用 `sysctl kern.proc.all` 与 `proc_pidinfo` 的运行线程数；其他平台返回 false。状态只用于展示，误判无害。
+
+## 并发与背压
+
+- Manager 与 Session 状态由各自的锁保护，锁不跨越阻塞的网络或 PTY 操作。
+- 共享的 PTY 输出块不可变；每个连接只有一个写 goroutine，负责合并输出（最多 64 KiB）并写入 WebSocket。
+- 订阅者队列有界，慢客户端被断开（关闭码 4408）后重连回放，而不会阻塞 PTY reader。
+- PTY 使用 Go netpoll 支持的非阻塞描述符；连接断开可取消阻塞中的输入写入，不影响持久会话。输入在等待写锁前后都会检查取消状态，单次写入最长 10 秒。
+
+## 仓库与 worktree
+
+- 仓库清单为版本化 JSON，通过临时文件 + fsync + 原子替换保存，进程文件锁防止多实例覆盖。
+- Git 以 argv 方式调用，使用 NUL 分隔的机器输出并禁用交互；读操作期限 10 秒，写操作 30 秒。
+- 所有会话创建经过统一协调层登记启动目录；删除预留会阻止目标目录的新启动。
+- 删除预览生成 5 分钟内单次有效的确认 ID，绑定目录、分支、锁和会话集合，执行前重新验证。强制删除等待相关会话完全退出后执行单次 `git worktree remove --force`，不使用递归删除兜底。
+
+## 只读代码工作区
+
+- 根目录在首次读取时绑定到会话启动目录所在的 worktree 顶层，之后不随终端中的 `cd` 变化。
+- 路径从根目录描述符逐段 `openat(O_NOFOLLOW)` 打开，拒绝符号链接遍历、特殊文件、`.git` 内部和嵌套仓库。
+- Git 查询设置 `GIT_OPTIONAL_LOCKS=0`，禁用 clean / process filters 与 fsmonitor，从不修改索引或对象。
+- 内容快照归属会话，总预算 64 MiB、最长 10 分钟；过期返回 410，不会用新内容冒充旧快照。
+- Diff 在浏览器 Web Worker 中使用 jsdiff 计算，服务端只返回冻结的双侧原文。
+
+## 前端
+
+- Svelte 5 + TypeScript + Vite，基础控件使用 shadcn-svelte，样式基于 Tailwind CSS。
+- 所有 HTTP 响应、WebSocket JSON 和本地设置都先经 Zod 校验（`web/src/schemas.ts`），再进入页面状态。
+- 终端使用 xterm.js 5 与 WebGL 渲染；WebGL 不可用、上下文丢失或像素尺寸不一致时回退到 DOM 渲染器，不重置终端。
+- PTY 数据始终以二进制传输，不转为 JSON 或解码文本。
+
+## 已知实现要点
+
+- `pty.Read` 在子进程退出后返回 `EIO`，是正常的结束信号。
+- `coder/websocket` 的写入不是并发安全的，所有写操作都经由连接的单个 writer。
+- xterm.js 的 `write` 是异步的，回放完成后需在回调中滚动到底部。
+- SPA 回退对 `/assets/*` 返回 404，避免缺失资源被 `index.html` 替代。
+- 未构建前端时 `go test` 仍可运行，但 HTTP 页面返回 503。

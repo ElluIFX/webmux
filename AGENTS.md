@@ -61,12 +61,12 @@ Vite proxies `/api` and `/ws` to backend port 7681. Run the backend separately a
 - `web/embed.go`: embeds `web/dist`; rebuild the frontend before compiling Go to avoid missing or stale assets.
 - `Makefile`, `go.mod`, `web/package.json`, `web/pnpm-lock.yaml`, `web/pnpm-workspace.yaml`: build commands, tool/dependency versions, and permitted install scripts.
 - `web/vite.config.ts`, `web/tsconfig.json`, `web/components.json`, `.prettierrc.json`: proxy/alias, strict typing, UI generation, and formatting configuration.
-- `README.md`: practical setup, security, development, and deployment guidance. `WebMux.md`: product behavior and protocol design; confirm implementation details against source. `deploy/config.example.toml` and `deploy/webmux.service`: TOML and systemd examples.
-- `openspec/config.yaml`: spec-driven workflow context. Write new specification artifacts in Simplified Chinese, retaining English structural headings and SHALL/MUST keywords. `.agents/`, `.claude/`, and `.omp/` contain generated workflow integrations; preserve the canonical README/design docs.
+- `README.md`, `docs/` (usage, deployment, architecture, protocol), `CONTRIBUTING.md`, `SECURITY.md`: user and contributor documentation at overview level; confirm implementation details against source. Documentation updates are not required for every change. `deploy/config.example.toml`, `deploy/webmux.service`, `deploy/com.webmux.plist`: TOML, systemd, and launchd examples.
+- `openspec/config.yaml`: spec-driven workflow context. Write new specification artifacts in Simplified Chinese, retaining English structural headings and SHALL/MUST keywords. `.agents/`, `.claude/`, and `.omp/` contain generated workflow integrations.
 
 ## Runtime/Tooling Preferences
 
-Use Go 1.23+, Node.js 24 LTS, pnpm 12.11.2, and GNU Make. Use pnpm—not npm, Yarn, or Bun—to manage frontend dependencies; retain the frozen lockfile workflow and the `esbuild`-only dependency build-script allowlist.
+Use Go 1.24+, Node.js 24 LTS, pnpm 12.11.2, and GNU Make. Use pnpm—not npm, Yarn, or Bun—to manage frontend dependencies; retain the frozen lockfile workflow and the `esbuild`-only dependency build-script allowlist.
 
 Production needs only the Linux or macOS binary, a shell, and any chosen CLI agents; it does not require Node or Go. `deploy/webmux.service` (systemd) and `deploy/com.webmux.plist` (launchd) are the service examples. Release builds use `CGO_ENABLED=0`. `make check` needs a separately installed `golangci-lint`; current CI does not run that lint target. OpenSpec 1.13.0 is optional workflow tooling, not a frontend runtime dependency.
 
