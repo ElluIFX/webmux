@@ -48,6 +48,8 @@ export function useTerminal(
   let terminal: Terminal | undefined;
   let socket: SocketConnection | undefined;
   let fit: FitAddon | undefined;
+  let restoreBuffer: ((payload: Uint8Array) => void) | undefined;
+  let scrollOnFit = false;
   let info = $state<SessionInfo>();
   let connection = $state<Connection>("connecting");
   let restoring = $state(true);
@@ -67,8 +69,17 @@ export function useTerminal(
   let pasteResult = false;
   function safeFit() {
     const parent = getContainer();
-    if (isVisible() && parent?.clientWidth > 0 && parent?.clientHeight > 0)
+    if (isVisible() && parent?.clientWidth > 0 && parent?.clientHeight > 0) {
       fit?.fit();
+      if (scrollOnFit && terminal) {
+        terminal.scrollToBottom();
+        scrollOnFit = false;
+      }
+    }
+  }
+  function scrollToBottom() {
+    scrollOnFit = true;
+    safeFit();
   }
   function send(input: string) {
     const value = modifiedInput(input, modifiers);
@@ -145,16 +156,23 @@ export function useTerminal(
       term.textarea?.setAttribute("spellcheck", "false");
       let stale = false;
       let exited = false;
+      let restoreFrame = 0;
+      let restoreVersion = 0;
       const restore = (payload: Uint8Array) => {
+        const version = ++restoreVersion;
+        cancelAnimationFrame(restoreFrame);
         restoring = true;
         term.reset();
         term.write(payload, () => {
-          if (!disposed) {
-            term.scrollToBottom();
+          if (disposed || version !== restoreVersion) return;
+          restoreFrame = requestAnimationFrame(() => {
+            if (disposed || version !== restoreVersion) return;
+            scrollToBottom();
             restoring = false;
-          }
+          });
         });
       };
+      restoreBuffer = restore;
       const ws = connect(
         "/ws/s/" + id,
         (data) => {
@@ -550,6 +568,7 @@ export function useTerminal(
       return () => {
         disposed = true;
         cancelAnimationFrame(remeasureFrame);
+        cancelAnimationFrame(restoreFrame);
         document.fonts.removeEventListener("loadingdone", remeasure);
         clearTimeout(timer);
         observer.disconnect();
@@ -575,6 +594,8 @@ export function useTerminal(
         terminal = undefined;
         socket = undefined;
         fit = undefined;
+        restoreBuffer = undefined;
+        scrollOnFit = false;
       };
     }
 
@@ -643,16 +664,14 @@ export function useTerminal(
     resync() {
       if (exitCode !== null) {
         void apiBuffer(id)
-          .then((payload) => {
-            terminal?.reset();
-            terminal?.write(payload, () => terminal?.scrollToBottom());
-          })
+          .then((payload) => restoreBuffer?.(payload))
           .catch((err) => {
             error = (err as Error).message;
           });
       } else socket?.send(2, new Uint8Array());
     },
     fit: safeFit,
+    scrollToBottom,
     focus() {
       terminal?.focus();
     },

@@ -80,6 +80,132 @@ test("real shell output survives reload, then closes and is removed", async ({
   expect(await (await request.get("/api/sessions")).json()).toEqual([]);
 });
 
+test("replay and the header action return to latest output without typing", async ({
+  page,
+  request,
+  workDir,
+}, info) => {
+  const marker = "scroll-latest-output";
+  const id = await createShell(page, "Scroll restoration", workDir);
+  await runCommand(
+    page,
+    "for ((i=1;i<=200;i++)); do printf 'history-%03d\\n' \"$i\"; done; printf 'scroll-latest-%s\\n' output",
+  );
+  await expectTerminalLine(page, marker);
+  await expectTerminalLine(page, "webmux-e2e$");
+  const latest = page.getByRole("button", {
+    name: "滚动到最新位置",
+    exact: true,
+  });
+  const scrollBack = async () => {
+    await expect(latest).toBeEnabled();
+    if (info.project.use.isMobile) {
+      const bounds = (await page.locator(".xterm-screen").boundingBox())!;
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const x = bounds.x + bounds.width / 2;
+        const y = bounds.y + bounds.height / 4;
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [{ x, y, id: 1 }],
+        });
+        for (let step = 1; step <= 6; step++)
+          await cdp.send("Input.dispatchTouchEvent", {
+            type: "touchMove",
+            touchPoints: [{ x, y: y + (bounds.height * step) / 12, id: 1 }],
+          });
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchEnd",
+          touchPoints: [],
+        });
+      } finally {
+        await cdp.detach();
+      }
+    } else {
+      await page.locator(".xterm-screen").hover();
+      await page.mouse.wheel(0, -10000);
+    }
+    await expect(page.locator(".xterm-rows")).not.toContainText(marker);
+  };
+  await scrollBack();
+  await page
+    .locator(".xterm-helper-textarea")
+    .evaluate((element) => element.blur());
+  const before = await (await request.get(`/api/sessions/${id}/buffer`)).text();
+  await latest.click();
+  await expectTerminalLine(page, marker);
+  await expect(page.locator(".xterm-helper-textarea")).not.toBeFocused();
+  expect(await (await request.get(`/api/sessions/${id}/buffer`)).text()).toBe(
+    before,
+  );
+
+  await scrollBack();
+  await page.reload();
+  await expect(page.locator(".restore-overlay")).toBeHidden();
+  await expectTerminalLine(page, marker);
+
+  await scrollBack();
+  await page.getByRole("button", { name: "终端菜单", exact: true }).click();
+  await page.getByRole("menuitem", { name: "重新同步", exact: true }).click();
+  await expectTerminalLine(page, marker);
+
+  await scrollBack();
+  if (info.project.use.isMobile) {
+    await page
+      .locator(".terminal-header")
+      .getByRole("button", { name: "代码", exact: true })
+      .click();
+    await expect(
+      page.getByRole("region", { name: "代码工作区" }),
+    ).toBeVisible();
+  }
+  // A controlled visibility transition exercises the real reattached WebSocket
+  // and PTY snapshot; it is not a real-device suspend/resume test.
+  const replay = page.waitForEvent("websocket").then((socket) =>
+    socket.waitForEvent("framereceived", {
+      predicate: ({ payload }) =>
+        typeof payload !== "string" && payload[0] === 1,
+    }),
+  );
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Reflect.deleteProperty(document, "hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await replay;
+  await expect(latest).toBeEnabled();
+  if (info.project.use.isMobile)
+    await page
+      .locator(".terminal-header")
+      .getByRole("button", { name: "终端", exact: true })
+      .click();
+  await expectTerminalLine(page, marker);
+
+  if (info.project.use.isMobile) {
+    await scrollBack();
+    await page
+      .locator(".terminal-header")
+      .getByRole("button", { name: "代码", exact: true })
+      .click();
+    await latest.tap();
+    await expect(page.locator(".terminal-host")).toBeVisible();
+    await expectTerminalLine(page, marker);
+  }
+  await runCommand(page, "exit");
+  await expect(page.locator(".terminal-header").getByRole("status")).toHaveText(
+    "已退出",
+  );
+  await scrollBack();
+  await page.getByRole("button", { name: "终端菜单", exact: true }).click();
+  await page.getByRole("menuitem", { name: "重新同步", exact: true }).click();
+  await expectTerminalLine(page, marker);
+  await expect(latest).toBeEnabled();
+});
+
 test("shell exit reports its real code and remains removable", async ({
   page,
   request,

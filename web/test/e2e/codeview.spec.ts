@@ -51,21 +51,53 @@ test("read ordinary files, independent tabs, updates and insert a line without E
   await expect(
     page.getByLabel("只读代码").filter({ visible: true }),
   ).toContainText("unchanged line");
-  await page
-    .locator(".code-reader:visible .cm-lineNumbers .cm-gutterElement")
-    .filter({ hasText: /^2$/ })
-    .click();
-  await expect(
-    page.getByLabel("位置预览").filter({ visible: true }),
-  ).toHaveText(join(workDir, "clean.go") + ":2 ");
-  await page.getByRole("button", { name: "发送位置到终端" }).click();
-  if (info.project.name.includes("mobile")) {
+  if (info.project.use.isMobile) {
+    await page
+      .locator(".code-reader:visible .cm-line")
+      .filter({ hasText: /^package main$/ })
+      .tap();
+    await expect(
+      page.getByRole("button", { name: "发送第 1 行位置到终端", exact: true }),
+    ).toBeVisible();
+    await page
+      .locator(".code-reader:visible .cm-line")
+      .filter({ hasText: /^package main$/ })
+      .evaluate((row) => {
+        const range = document.createRange();
+        range.selectNodeContents(row);
+        const selection = getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+    await expect(
+      page.getByRole("button", { name: "发送第 1 行位置到终端", exact: true }),
+    ).toHaveCount(0);
+    expect(await page.evaluate(() => getSelection()?.toString())).toBe(
+      "package main",
+    );
+    await page.evaluate(() => getSelection()?.removeAllRanges());
+    await page
+      .locator(".code-reader:visible .cm-line")
+      .filter({ hasText: /^\/\/ unchanged line$/ })
+      .tap();
+    await expect(
+      page.getByRole("button", { name: "发送第 1 行位置到终端", exact: true }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "发送第 2 行位置到终端", exact: true })
+      .tap();
     await expect(page.locator(".terminal-host")).toBeVisible();
-  } else
+  } else {
+    await page
+      .locator(".code-reader:visible .cm-lineNumbers .cm-gutterElement")
+      .filter({ hasText: /^2$/ })
+      .click();
+    await page.getByRole("button", { name: "发送位置到终端" }).click();
     await page
       .locator(".terminal-header")
       .getByRole("button", { name: "折叠代码" })
       .click();
+  }
   const buffer = await (await request.get(`/api/sessions/${id}/buffer`)).text();
   expect(buffer).not.toContain(`reference: ${join(workDir, "clean.go")}:2\r\n`);
   await page.locator(".xterm-helper-textarea").focus();
@@ -98,6 +130,15 @@ test("read ordinary files, independent tabs, updates and insert a line without E
       .getByRole("button", { name: "发送位置到终端" })
       .filter({ visible: true }),
   ).toBeDisabled();
+  if (info.project.use.isMobile) {
+    await page
+      .locator(".code-reader:visible .cm-line")
+      .filter({ hasText: /^\/\/ unchanged line$/ })
+      .tap();
+    await expect(
+      page.getByRole("button", { name: "发送第 2 行位置到终端", exact: true }),
+    ).toBeDisabled();
+  }
   await page
     .getByRole("button", { name: "刷新文档" })
     .filter({ visible: true })
@@ -106,8 +147,8 @@ test("read ordinary files, independent tabs, updates and insert a line without E
     page.getByLabel("只读代码").filter({ visible: true }),
   ).toContainText("new version");
   await expect(
-    page.getByLabel("位置预览").filter({ visible: true }),
-  ).toHaveText(join(workDir, "clean.go") + " ");
+    page.getByRole("button", { name: /^发送第 \d+ 行位置到终端$/ }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "文件内查找" })
     .filter({ visible: true })
@@ -121,6 +162,70 @@ test("read ordinary files, independent tabs, updates and insert a line without E
       page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     )
     .toBe(true);
+});
+
+test("touch line actions use the selected Git side and never reuse an invalid row", async ({
+  page,
+  request,
+  workDir,
+}, info) => {
+  test.skip(!info.project.use.isMobile, "Touch line actions are mobile-only");
+  git(workDir, "init", "-q");
+  await writeFile(join(workDir, "code.txt"), "first\nremoved\nlast\n");
+  git(workDir, "add", ".");
+  git(workDir, "commit", "-qm", "initial");
+  await writeFile(
+    join(workDir, "code.txt"),
+    "first\nadded one\nadded two\nlast\n",
+  );
+  const id = await createShell(page, "Touch Git references", workDir);
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.type("printf 'old:%s\\n' ");
+  await showCode(page);
+  await page.getByRole("tab", { name: "修改", exact: true }).click();
+  await page.getByRole("button", { name: "M code.txt", exact: true }).click();
+  const lines = page.locator(".code-reader:visible .cm-line");
+  await lines.filter({ hasText: /^\+added two$/ }).tap();
+  await expect(
+    page.getByRole("button", { name: "发送第 3 行位置到终端", exact: true }),
+  ).toBeVisible();
+  await lines.filter({ hasText: /^-removed$/ }).tap();
+  await expect(
+    page.getByRole("button", { name: /^发送第 \d+ 行位置到终端$/ }),
+  ).toHaveCount(0);
+  await page
+    .getByLabel("引用来源")
+    .filter({ visible: true })
+    .selectOption("old");
+  await lines.filter({ hasText: /^-removed$/ }).tap();
+  await page
+    .getByRole("button", { name: "发送第 2 行位置到终端", exact: true })
+    .tap();
+  await expect(page.locator(".terminal-host")).toBeVisible();
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () => (await request.get(`/api/sessions/${id}/buffer`)).text())
+    .toContain(`old:${join(workDir, "code.txt")}:2（索引版本）\r\n`);
+  await page.keyboard.type("printf 'new:%s\\n' ");
+  await showCode(page);
+  await page
+    .getByLabel("引用来源")
+    .filter({ visible: true })
+    .selectOption("new");
+  await expect(
+    page.getByRole("button", { name: /^发送第 \d+ 行位置到终端$/ }),
+  ).toHaveCount(0);
+  await lines.filter({ hasText: /^\+added two$/ }).tap();
+  await page
+    .getByRole("button", { name: "发送第 3 行位置到终端", exact: true })
+    .tap();
+  await expect(page.locator(".terminal-host")).toBeVisible();
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(async () => (await request.get(`/api/sessions/${id}/buffer`)).text())
+    .toContain(`new:${join(workDir, "code.txt")}:3\r\n`);
 });
 
 test("frozen Git diff, ignored navigation and complete source documents", async ({
@@ -177,7 +282,11 @@ test("frozen Git diff, ignored navigation and complete source documents", async 
   );
   await writeFile(join(workDir, "code.txt"), "external replacement\n");
   await page
-    .getByRole("button", { name: "展开全部", exact: true })
+    .getByRole("button", { name: "向上展开 30 行", exact: true })
+    .first()
+    .click();
+  await page
+    .getByRole("button", { name: /展开隐藏的 \d+ 行/ })
     .first()
     .click();
   await expect(
@@ -215,9 +324,6 @@ test("frozen Git diff, ignored navigation and complete source documents", async 
   await expect(
     page.getByLabel("只读代码").filter({ visible: true }),
   ).not.toContainText("working line 80");
-  await expect(
-    page.getByLabel("位置预览").filter({ visible: true }),
-  ).toContainText("（索引版本）");
   await nav(page);
   await page
     .getByRole("button", { name: "M code.txt", exact: true })
@@ -228,8 +334,14 @@ test("frozen Git diff, ignored navigation and complete source documents", async 
   ).toContainText("indexed line 50");
   await page.getByRole("button", { name: "旧侧完整文件" }).click();
   await expect(
-    page.getByLabel("位置预览").filter({ visible: true }),
-  ).toContainText("（HEAD 旧版本）");
+    page.getByRole("tab", { name: /^code\.txt · head(?: ●)?$/ }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByLabel("只读代码").filter({ visible: true }),
+  ).toContainText("ordinary line 1");
+  await expect(
+    page.getByLabel("只读代码").filter({ visible: true }),
+  ).not.toContainText("indexed line 50");
 });
 
 test("main and linked worktrees bind their own roots and reject cross-session snapshots", async ({
@@ -276,9 +388,6 @@ test("main and linked worktrees bind their own roots and reject cross-session sn
   await expect(
     page.getByLabel("只读代码").filter({ visible: true }),
   ).toContainText("linked source");
-  await expect(
-    page.getByLabel("位置预览").filter({ visible: true }),
-  ).toHaveText(join(linked, "src/clean.txt") + " ");
   expect(
     (
       await request.get(

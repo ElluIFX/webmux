@@ -1,55 +1,146 @@
 import { readFile } from "node:fs/promises";
 import { test, expect, createShell, expectTerminalLine } from "./fixtures";
 
-test("file chooser shows progress, uploads to temp, and pastes a shell-safe path without Enter", async ({
+test("file chooser shows progress, survives foreground replay, and pastes a shell-safe path without Enter", async ({
   page,
+  request,
   workDir,
-}) => {
+}, info) => {
   const id = await createShell(page, "File upload", workDir);
   const contents = Buffer.from("UPLOADED_FILE_CONTENT\n");
-  const { promise, resolve } = Promise.withResolvers<void>();
+  const uploadGate = Promise.withResolvers<void>();
+  const replayGate = Promise.withResolvers<void>();
+  let requests = 0;
   await page.route(`**/api/sessions/${id}/upload`, async (route) => {
-    await promise;
+    requests++;
+    await uploadGate.promise;
     await route.continue();
   });
-  await page.locator(".xterm-helper-textarea").focus();
-  await page.keyboard.type("cat ");
-  const response = page.waitForResponse((response) =>
-    response.url().endsWith(`/api/sessions/${id}/upload`),
-  );
-  const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "上传文件", exact: true }).click();
-  await (
-    await chooser
-  ).setFiles({
-    name: "notes 'quoted'.txt",
-    mimeType: "text/plain",
-    buffer: contents,
-  });
+  if (info.project.use.isMobile) {
+    await page.routeWebSocket(`**/ws/s/${id}**`, async (socket) => {
+      await replayGate.promise;
+      socket.connectToServer();
+    });
+  }
   try {
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("cat ");
+    const response = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/sessions/${id}/upload`),
+    );
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "上传文件", exact: true }).click();
+    if (info.project.use.isMobile) {
+      await page.evaluate(() => {
+        Object.defineProperty(document, "hidden", {
+          configurable: true,
+          value: true,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        Reflect.deleteProperty(document, "hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    }
+    await (
+      await chooser
+    ).setFiles({
+      name: "notes 'quoted'.txt",
+      mimeType: "text/plain",
+      buffer: contents,
+    });
     await expect(
       page.getByRole("progressbar", { name: "文件上传进度" }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "上传文件", exact: true }),
     ).toBeDisabled();
+    uploadGate.resolve();
+    const uploaded = await response;
+    expect(uploaded.status()).toBe(201);
+    const { path } = await uploaded.json();
+    expect(path).toContain("webmux-upload-");
+    expect(path.startsWith(workDir)).toBe(false);
+    expect(await readFile(path)).toEqual(contents);
+    if (info.project.use.isMobile) {
+      await expect(
+        page
+          .getByRole("status")
+          .filter({ hasText: "文件已上传，等待终端恢复" }),
+      ).toBeVisible();
+      expect(
+        await (await request.get(`/api/sessions/${id}/buffer`)).text(),
+      ).not.toContain("notes");
+      replayGate.resolve();
+    }
+    await expect(
+      page.getByRole("progressbar", { name: "文件上传进度" }),
+    ).toBeHidden();
+    await expect(page.locator(".xterm-rows")).not.toContainText(
+      "UPLOADED_FILE_CONTENT",
+    );
+    expect(requests).toBe(1);
+    await page.locator(".xterm-helper-textarea").press("Enter");
+    await expectTerminalLine(page, "UPLOADED_FILE_CONTENT");
   } finally {
-    resolve();
+    uploadGate.resolve();
+    replayGate.resolve();
   }
-  const uploaded = await response;
-  expect(uploaded.status()).toBe(201);
-  const { path } = await uploaded.json();
-  expect(path).toContain("webmux-upload-");
-  expect(path.startsWith(workDir)).toBe(false);
-  expect(await readFile(path)).toEqual(contents);
-  await expect(
-    page.getByRole("progressbar", { name: "文件上传进度" }),
-  ).toBeHidden();
-  await expect(page.locator(".xterm-rows")).not.toContainText(
-    "UPLOADED_FILE_CONTENT",
-  );
-  await page.locator(".xterm-helper-textarea").press("Enter");
-  await expectTerminalLine(page, "UPLOADED_FILE_CONTENT");
+});
+
+test("cancelling an uploaded path during replay never pastes it after reconnect", async ({
+  page,
+  request,
+  workDir,
+}, info) => {
+  test.skip(!info.project.use.isMobile, "Mobile file picker recovery");
+  const id = await createShell(page, "Cancel pending upload", workDir);
+  const replayGate = Promise.withResolvers<void>();
+  await page.routeWebSocket(`**/ws/s/${id}**`, async (socket) => {
+    await replayGate.promise;
+    socket.connectToServer();
+  });
+  try {
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "上传文件", exact: true }).click();
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        value: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      Reflect.deleteProperty(document, "hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const response = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/sessions/${id}/upload`),
+    );
+    await (
+      await chooser
+    ).setFiles({
+      name: "cancel-pending.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("CANCELLED_PATH_CONTENT\n"),
+    });
+    const uploaded = await response;
+    expect(uploaded.status()).toBe(201);
+    const { path } = await uploaded.json();
+    await expect(
+      page.getByRole("status").filter({ hasText: "文件已上传，等待终端恢复" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(path);
+    await expect(page.getByRole("alert")).toContainText("操作已取消");
+    replayGate.resolve();
+    await expect(
+      page.locator(".terminal-header").getByRole("status"),
+    ).toHaveText("已连接");
+    await expect(page.locator(".restore-overlay")).toBeHidden();
+    expect(
+      await (await request.get(`/api/sessions/${id}/buffer`)).text(),
+    ).not.toContain("cancel-pending.txt");
+  } finally {
+    replayGate.resolve();
+  }
 });
 
 test("dragging a file into the terminal uploads actual bytes and pastes the path", async ({

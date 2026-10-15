@@ -90,9 +90,10 @@ describe("browser text diff", () => {
     expect(
       blocks.find((b) => b.start === middle.start)?.lines.map((l) => l.oldLine),
     ).toEqual(Array.from({ length: 43 }, (_, i) => 104 + i));
-    blocks = expandDiff(rows, blocks, "all", "all");
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0].lines).toEqual(rows);
+    for (const gap of blocks.filter((b) => b.kind === "gap")) {
+      blocks = expandDiff(rows, blocks, gap.gapId, "all");
+    }
+    expect(blocks.flatMap((b) => b.lines)).toEqual(rows);
     expect(rows.filter((l) => l.newLine).map((l) => l.newLine)).toEqual(
       Array.from({ length: 200 }, (_, i) => i + 1),
     );

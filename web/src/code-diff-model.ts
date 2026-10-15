@@ -68,7 +68,6 @@ export function expandDiff(
   gapId: string,
   direction: "up" | "down" | "all",
 ): CodeBlock[] {
-  if (gapId === "all") return all.length ? [block(all, 0, all.length)] : [];
   return blocks.flatMap((gap) => {
     if (gap.kind !== "gap" || gap.gapId !== gapId) return [gap];
     const from =

@@ -19,6 +19,7 @@
   import { codeReference, nodeId } from "../code-reference";
   import CodeReader from "./CodeReader.svelte";
   import { Button } from "$lib/components/ui/button";
+  import { IconPlus } from "@tabler/icons-svelte";
   let {
     id,
     active = true,
@@ -73,7 +74,6 @@
   let start = $state<number>();
   let end = $state<number>();
   let error = $state("");
-  let message = $state("");
   let busy = $state(false);
   let generation = $state(0);
   let reader = $state<CodeReader>();
@@ -91,13 +91,24 @@
       ? blocks.flatMap((b) => (b.kind === "gap" ? [null] : b.lines))
       : undefined,
   );
+  let gaps = $derived.by(() => {
+    const result = new Map<number, CodeBlock>();
+    let line = 1;
+    for (const block of blocks) {
+      if (block.kind === "gap") {
+        result.set(line, block);
+        line++;
+      } else line += block.lines.length;
+    }
+    return result;
+  });
   let text = $derived(
     shownDiff
       ? (mapping ?? [])
           .map((l) =>
             l
               ? `${l.kind === "add" ? "+" : l.kind === "delete" ? "-" : " "}${l.text}`
-              : "⋯ 未展开上下文 ⋯",
+              : "",
           )
           .join("\n")
       : (doc?.text ?? ""),
@@ -120,7 +131,6 @@
         start = undefined;
         end = undefined;
         error = "";
-        message = "";
         generation++;
       }
     });
@@ -229,7 +239,6 @@
   }
   function select(a: number, z: number) {
     error = "";
-    message = "";
     if (mapping) {
       const chosen = mapping.slice(a - 1, z);
       if (chosen.some((l) => !l)) {
@@ -254,10 +263,33 @@
       end = z;
     }
   }
+  function referenceAt(row: number) {
+    const mapped = mapping?.[row - 1];
+    const number = mapping
+      ? side === "old"
+        ? mapped?.oldLine
+        : mapped?.newLine
+      : row;
+    if (!doc || !number) return;
+    try {
+      return { number, text: codeReference(doc, number) };
+    } catch {
+      return;
+    }
+  }
+  function send(reference = preview) {
+    if (!reference || status !== "unchanged") return;
+    error = paste(reference) ? "" : "终端未就绪，位置未插入；请连接后重试";
+  }
   function expand(gapId: string, direction: "up" | "down" | "all") {
     if (!diffReady || status === "expired") return;
     anchor = reader?.line() ?? 1;
+    const top = mapping?.[anchor - 1];
     blocks = expandDiff(allLines, blocks, gapId, direction);
+    if (top) {
+      const row = mapping?.indexOf(top) ?? -1;
+      if (row >= 0) anchor = row + 1;
+    }
     generation++;
   }
   async function full(which: "old" | "new") {
@@ -294,11 +326,6 @@
 <div class="flex h-full min-h-0 flex-col overflow-hidden">
   <div class="shrink-0 space-y-1 border-b p-2 text-xs">
     <p class="break-all">{doc?.absolutePath}</p>
-    <p class="text-muted-foreground">
-      来源：{doc?.source} · 读取于 {new Date(
-        file?.checkedAt ?? diff?.checkedAt ?? "",
-      ).toLocaleTimeString()} · 只读快照
-    </p>
     {#if file}<div class="flex gap-2">
         <Button variant="outline" size="sm" onclick={() => (mode = "file")}
           >完整文件</Button
@@ -310,9 +337,11 @@
         >
       </div>{/if}
     {#if shownDiff}
-      <p class="break-all">
-        {shownDiff.change.oldPath} → {shownDiff.change.newPath}
-      </p>
+      {#if shownDiff.change.oldPath !== shownDiff.change.newPath}
+        <p class="break-all">
+          {shownDiff.change.oldPath} → {shownDiff.change.newPath}
+        </p>
+      {/if}
       <div class="flex flex-wrap items-center gap-2">
         <label
           >引用来源 <select
@@ -321,6 +350,7 @@
             onchange={() => {
               start = undefined;
               end = undefined;
+              reader?.clearLineAction();
             }}
             class="rounded border bg-background p-1"
             ><option value="new">新侧 ({shownDiff.new.source})</option><option
@@ -363,78 +393,54 @@
       >
     {/if}
   {/if}
-  {#if shownDiff?.kind === "text" && diffReady}
-    <div
-      class="flex max-h-28 shrink-0 flex-wrap gap-1 overflow-auto border-b p-1"
-      aria-label="差异上下文"
-    >
-      {#if blocks.some((b) => b.kind === "gap")}<Button
-          size="sm"
-          variant="outline"
-          disabled={status === "expired"}
-          onclick={() => expand("all", "all")}>展开全部</Button
-        >{/if}
-      {#each blocks.filter((b) => b.kind === "gap") as b (b.gapId)}
-        <span class="rounded border p-1 text-xs"
-          >省略 {b.count} 行
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={status === "expired"}
-            onclick={() => expand(b.gapId, "up")}>向上 30 行</Button
-          >
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={status === "expired"}
-            onclick={() => expand(b.gapId, "down")}>向下 30 行</Button
-          >
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={status === "expired"}
-            onclick={() => expand(b.gapId, "all")}>展开此段</Button
-          >
-        </span>
-      {/each}
-    </div>
-  {/if}
   {#if doc?.kind === "text" && (!shownDiff || (shownDiff.kind === "text" && diffReady))}
     {#key `${lastVersion}:${generation}`}<CodeReader
         bind:this={reader}
         {text}
         path={doc.path}
         {mapping}
+        {gaps}
+        onexpand={expand}
+        canExpand={() => status !== "expired"}
         restoreLine={anchor}
         onselect={select}
-      />{/key}
+      >
+        {#snippet lineAction(row)}
+          {@const reference = referenceAt(row)}
+          {#if reference}
+            <Button
+              size="icon"
+              class="size-11 border border-border shadow-sm"
+              aria-label={`发送第 ${reference.number} 行位置到终端`}
+              title={`发送第 ${reference.number} 行位置到终端`}
+              disabled={status !== "unchanged"}
+              onclick={() => send(reference.text)}
+              ><IconPlus class="size-5" aria-hidden="true" /></Button
+            >
+          {/if}
+        {/snippet}
+      </CodeReader>{/key}
   {/if}
   <div class="mt-auto shrink-0 space-y-1 border-t p-2">
     {#if error}<p class="text-sm text-destructive" role="alert">{error}</p>{/if}
-    {#if message}<p class="text-xs" role="status">{message}</p>{/if}
-    <p class="break-all font-mono text-xs" aria-label="位置预览">
-      {preview || "此来源无法引用"}
-    </p>
-    <div class="flex gap-2">
+    <div class="flex flex-wrap gap-2">
       <Button
         variant="outline"
         size="sm"
         onclick={() => {
           start = undefined;
           end = undefined;
+          reader?.clearLineAction();
         }}>引用整个文件</Button
       >
       <Button
         size="sm"
         disabled={!preview || status !== "unchanged"}
-        onclick={() => {
-          if (paste(preview)) {
-            message = "已插入终端，未自动回车";
-            error = "";
-          } else {
-            error = "终端未就绪，位置未插入；请连接后重试";
-          }
-        }}>发送位置到终端</Button
+        onclick={() => send()}
+        >发送位置到终端{#if start !== undefined}（{start}{end !== undefined &&
+          end !== start
+            ? `-${end}`
+            : ""} 行）{/if}</Button
       >
     </div>
   </div>

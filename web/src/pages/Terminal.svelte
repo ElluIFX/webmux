@@ -2,6 +2,7 @@
   import { onMount, tick, untrack, type Component } from "svelte";
   import {
     IconArrowLeft,
+    IconArrowDown,
     IconMaximize,
     IconMinimize,
     IconUpload,
@@ -28,8 +29,14 @@
     percent: number;
     index: number;
     total: number;
+    waiting: boolean;
   } | null>(null);
   let uploadController: AbortController | undefined;
+  let uploadWaiter = $state<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  } | null>(null);
+  let foreground = $state(!document.hidden);
   let error = $state("");
   let closing = $state(false);
   let pasteOpen = $state(false);
@@ -90,6 +97,21 @@
     },
     terminalVisible,
   );
+  $effect(() => {
+    const waiter = uploadWaiter;
+    if (!waiter) return;
+    if (
+      t.exitCode !== null ||
+      t.connection === "exited" ||
+      t.connection === "missing"
+    ) {
+      uploadWaiter = null;
+      waiter.reject(new Error("终端会话已退出或不存在"));
+    } else if (foreground && t.connection === "connected" && !t.restoring) {
+      uploadWaiter = null;
+      waiter.resolve();
+    }
+  });
 
   function filePaste(event: ClipboardEvent) {
     const files = Array.from(event.clipboardData?.files ?? []);
@@ -102,6 +124,17 @@
 
   onMount(() => {
     mounted = true;
+    let foregroundFrame = 0;
+    const visibilityChanged = () => {
+      cancelAnimationFrame(foregroundFrame);
+      foreground = false;
+      // Let foreground reconnect handlers invalidate the old socket first.
+      if (!document.hidden)
+        foregroundFrame = requestAnimationFrame(() => {
+          foreground = !document.hidden;
+        });
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
     const media = matchMedia("(min-width:1024px)");
     const layout = () => {
       desktop = media.matches;
@@ -147,6 +180,8 @@
     container.addEventListener("drop", drop, true);
     return () => {
       media.removeEventListener("change", layout);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      cancelAnimationFrame(foregroundFrame);
       mounted = false;
       uploadController?.abort();
       container.removeEventListener("paste", filePaste, true);
@@ -224,14 +259,36 @@
       error = (err as Error).message;
     }
   }
+  async function waitForUploadTerminal(signal: AbortSignal) {
+    if (signal.aborted) throw new DOMException("操作已取消", "AbortError");
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    const abort = () => reject(new DOMException("操作已取消", "AbortError"));
+    const timeout = window.setTimeout(
+      () => reject(new Error("等待终端恢复超时")),
+      30_000,
+    );
+    signal.addEventListener("abort", abort, { once: true });
+    uploadWaiter = { resolve, reject };
+    try {
+      await promise;
+    } finally {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", abort);
+      uploadWaiter = null;
+    }
+  }
   async function uploadFiles(files: File[]) {
     if (!files.length) return;
     if (upload) {
       error = "正在上传，请等待当前上传完成。";
       return;
     }
-    if (t.connection !== "connected" || t.exitCode !== null) {
-      error = "终端未连接，无法上传文件。";
+    if (
+      t.exitCode !== null ||
+      t.connection === "exited" ||
+      t.connection === "missing"
+    ) {
+      error = "终端会话已退出或不存在，无法上传文件。";
       return;
     }
     error = "";
@@ -244,6 +301,7 @@
           percent: 0,
           index: index + 1,
           total: files.length,
+          waiting: false,
         };
         const { path } = await uploadFile(
           id,
@@ -254,10 +312,18 @@
           controller.signal,
         );
         if (!mounted || controller.signal.aborted) return;
-        if (t.connection !== "connected" || t.exitCode !== null)
-          throw new Error(`文件已上传至 ${path}，但终端已断开，路径未发送。`);
-        // Quote arbitrary filenames safely. No newline: uploading never runs a command.
-        t.paste("'" + path.replaceAll("'", "'\\''") + "' ");
+        upload.waiting = true;
+        upload.percent = 100;
+        try {
+          await waitForUploadTerminal(controller.signal);
+          // Quote arbitrary filenames safely. Uploading never runs a command.
+          if (!t.paste("'" + path.replaceAll("'", "'\\''") + "' "))
+            throw new Error("终端未就绪");
+        } catch (err) {
+          throw new Error(
+            `文件已上传至 ${path}，但路径未发送：${(err as Error).message}`,
+          );
+        }
       }
       t.focus();
     } catch (err) {
@@ -386,6 +452,17 @@
       }}
     />
     <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label="滚动到最新位置"
+      title="滚动到最新位置"
+      disabled={t.restoring}
+      onclick={() => {
+        t.scrollToBottom();
+        if (!desktop) codeShown = false;
+      }}><IconArrowDown class="size-4" aria-hidden="true" /></Button
+    >
+    <Button
       variant="outline"
       size="sm"
       aria-pressed={codeShown}
@@ -439,7 +516,9 @@
     >
       <div class="flex items-center gap-3 text-xs" role="status">
         <span class="min-w-0 flex-1 truncate"
-          >正在上传 {upload.name}{upload.total > 1
+          >{upload.waiting
+            ? "文件已上传，等待终端恢复："
+            : "正在上传 "}{upload.name}{upload.total > 1
             ? `（${upload.index}/${upload.total}）`
             : ""}</span
         >

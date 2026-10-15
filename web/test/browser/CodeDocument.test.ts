@@ -9,6 +9,25 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+test("inline gap controls stop expansion when the mounted snapshot expires", async () => {
+  render(Harness);
+  await expect
+    .element(page.getByLabelText("只读代码"))
+    .toMatchTextContent("changed revision 1");
+  const expand = page
+    .getByRole("button", { name: /展开隐藏的 \d+ 行/ })
+    .first();
+  await expect.element(expand).toBeEnabled();
+  await page.getByRole("button", { name: "Expire snapshot" }).click();
+  await expect.element(expand).toBeDisabled();
+  await expect
+    .element(page.getByRole("button", { name: "向下展开 30 行", exact: true }))
+    .toBeDisabled();
+  await expect
+    .element(page.getByLabelText("只读代码"))
+    .toMatchTextContent("changed revision 1");
+});
+
 test("a real Worker computes diff; contexts expand locally and keep old-side references", async () => {
   const fetch = vi.fn(() => {
     throw new Error("context expansion must be local");
@@ -27,27 +46,44 @@ test("a real Worker computes diff; contexts expand locally and keep old-side ref
     document.querySelectorAll<HTMLElement>(".diff-gutter .cm-gutterElement"),
   ).find((e) => e.textContent === "50 ")!;
   await page.elementLocator(deleted).click();
+  await page.getByRole("button", { name: /发送位置到终端/ }).click();
   await expect
-    .element(page.getByLabelText("位置预览"))
+    .element(page.getByLabelText("Inserted reference"))
     .toHaveTextContent("/repo/code.txt:50（索引版本）");
   await page
-    .getByRole("button", { name: "向下 30 行", exact: true })
+    .getByRole("button", { name: /展开隐藏的 \d+ 行/ })
     .first()
     .click();
   await expect
     .element(page.getByLabelText("只读代码"))
     .toMatchTextContent("ordinary line 1");
+  await page.getByRole("button", { name: /发送位置到终端/ }).click();
   await expect
-    .element(page.getByLabelText("位置预览"))
+    .element(page.getByLabelText("Inserted reference"))
     .toHaveTextContent("/repo/code.txt:50（索引版本）");
-  await page.getByRole("button", { name: "展开全部", exact: true }).click();
+  const scrollToEnd = () => {
+    const scroller = document.querySelector<HTMLElement>(".cm-scroller")!;
+    scroller.scrollTop = scroller.scrollHeight;
+  };
+  scrollToEnd();
+  await page
+    .getByRole("button", { name: "向下展开 30 行", exact: true })
+    .click();
+  await expect
+    .poll(() => document.querySelector<HTMLElement>(".cm-scroller")!.scrollTop)
+    .toBeGreaterThan(0);
+  scrollToEnd();
+  await expect
+    .element(page.getByLabelText("只读代码"))
+    .toMatchTextContent("ordinary line 83");
   expect(fetch).not.toHaveBeenCalled();
   await page.getByRole("button", { name: "Replace snapshot" }).click();
   await expect
     .element(page.getByLabelText("只读代码"))
     .toMatchTextContent("changed revision 2");
+  await page.getByRole("button", { name: /发送位置到终端/ }).click();
   await expect
-    .element(page.getByLabelText("位置预览"))
+    .element(page.getByLabelText("Inserted reference"))
     .toHaveTextContent("/repo/code.txt（索引版本）");
 });
 
@@ -73,8 +109,9 @@ test("large deletions stay virtualized and retain the actual old line numbers", 
     document.querySelectorAll<HTMLElement>(".diff-gutter .cm-gutterElement"),
   ).find((e) => e.textContent === "19800 ")!;
   await page.elementLocator(target).click();
+  await page.getByRole("button", { name: /发送位置到终端/ }).click();
   await expect
-    .element(page.getByLabelText("位置预览"))
+    .element(page.getByLabelText("Inserted reference"))
     .toHaveTextContent("/repo/code.txt:19800（索引版本）");
   expect(document.querySelectorAll(".cm-line").length).toBeLessThan(150);
 });

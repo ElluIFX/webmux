@@ -5,6 +5,7 @@
   let revision = $state(1);
   let active = $state(true);
   let status = $state("unchanged");
+  let inserted = $state("");
   const original = $derived(
     Array.from(
       { length: deleted ? 20000 : 120 },
@@ -66,6 +67,7 @@
 
 <button onclick={() => revision++}>Replace snapshot</button>
 <button onclick={() => (active = !active)}>Toggle active</button>
+<button onclick={() => (status = "expired")}>Expire snapshot</button>
 <div style="height:650px;width:650px">
   <CodeDocumentView
     id="session"
@@ -73,7 +75,10 @@
     {active}
     {status}
     contextId="context"
-    paste={() => true}
+    paste={(text) => {
+      inserted = text;
+      return true;
+    }}
     refresh={() => {}}
     beginOpen={() => 1}
     openSide={() => {}}
@@ -81,3 +86,4 @@
     onState={(value) => (status = value)}
   />
 </div>
+<p aria-label="Inserted reference">{inserted}</p>
