@@ -20,8 +20,28 @@
   import * as Resizable from "$lib/components/ui/resizable";
   import SoftKeys from "../components/SoftKeys.svelte";
   import CloseSessionDialog from "../components/CloseSessionDialog.svelte";
+  import TerminalInputComposer from "../components/TerminalInputComposer.svelte";
+  import type {
+    DraftOperation,
+    TerminalDrafts,
+    TextInsertion,
+  } from "../terminal-draft.svelte";
 
-  let { id }: { id: string } = $props();
+  let {
+    id,
+    drafts,
+    onUploadNotice,
+  }: {
+    id: string;
+    drafts: TerminalDrafts;
+    onUploadNotice: (message: string) => void;
+  } = $props();
+  const draft = untrack(() => drafts.get(id));
+  let composer = $state<TerminalInputComposer>();
+  let composerSize = $state(50);
+  let terminalHeight = $state(0);
+  let sending = false;
+  let pasteOperation: DraftOperation | undefined;
   let container: HTMLDivElement;
   let fileInput: HTMLInputElement;
   let error = $state("");
@@ -42,7 +62,8 @@
       id: string;
       visible: boolean;
       connection: string;
-      paste: (text: string) => boolean;
+      paste: (text: string) => TextInsertion;
+      draftEnabled: boolean;
     }>
   >();
   let loadingCode = false;
@@ -63,12 +84,43 @@
     if (showing) void tick().then(() => t.fit());
   });
   function insertReference(text: string) {
-    const result = t.paste(text);
-    if (result && !desktop) {
+    const result = insertText(text);
+    if (result === "terminal" && !desktop) {
       codeShown = false;
       void tick().then(() => t.fit());
     }
     return result;
+  }
+  function insertText(
+    text: string,
+    operation = drafts.begin(draft),
+  ): TextInsertion {
+    if (!mounted) return "failed";
+    return drafts.insert(draft, text, operation, t.paste);
+  }
+  function controlNotice() {
+    error = "终端控制需先退出草稿模式；草稿框内可正常复制、选择和编辑。";
+  }
+  function softInput(input: string) {
+    if (draft.enabled) composer?.editKey(input);
+    else t.send(input);
+  }
+  function focusInput() {
+    if (draft.enabled) composer?.focus();
+    else t.focus();
+  }
+  function sendDraft() {
+    if (sending || !draft.enabled || !draft.text || !drafts.valid(draft))
+      return;
+    sending = true;
+    const text = draft.text;
+    try {
+      if (t.paste(text)) {
+        error = "";
+      } else error = "终端未就绪，草稿未发送；请恢复连接后手动重试。";
+    } finally {
+      sending = false;
+    }
   }
   const viewport = useViewport();
   const t = useTerminal(
@@ -83,13 +135,39 @@
       },
     },
     terminalVisible,
+    {
+      draftEnabled: () => draft.enabled,
+      focusDraft: () => composer?.focus(),
+      key: (event) => composer?.terminalKey(event),
+      insertText: (text) => {
+        insertText(text);
+      },
+    },
   );
+  const sendUnavailable = $derived(
+    t.connection === "missing"
+      ? "会话不存在，无法发送"
+      : t.exitCode !== null || t.connection === "exited"
+        ? "会话已退出，可编辑或复制草稿"
+        : !t.ready
+          ? "终端未就绪，草稿不会自动发送"
+          : "",
+  );
+  $effect(() => {
+    if (t.connection === "missing") drafts.remove(id);
+  });
   const uploads = useUpload(
     () => container,
     untrack(() => id),
     t,
     (message) => {
-      error = message;
+      if (mounted) error = message;
+      else if (message) onUploadNotice(`会话 ${id}：${message}`);
+    },
+    {
+      begin: () => drafts.begin(draft),
+      destination: (operation) => drafts.destination(draft, operation),
+      insert: insertText,
     },
   );
 
@@ -189,10 +267,11 @@
   }
 
   async function paste() {
+    const operation = drafts.begin(draft);
     try {
       if (
         matchMedia("(pointer: fine)").matches &&
-        typeof navigator.clipboard.read === "function"
+        typeof navigator.clipboard?.read === "function"
       ) {
         const items = await navigator.clipboard.read();
         if (!mounted) return;
@@ -212,7 +291,7 @@
           );
         }
         if (files.length) {
-          await uploads.uploadFiles(files);
+          if (mounted) await uploads.uploadFiles(files, operation);
           return;
         }
         const textItem = items.find((item) =>
@@ -220,23 +299,31 @@
         );
         if (textItem) {
           const text = await (await textItem.getType("text/plain")).text();
-          if (mounted) t.paste(text);
+          if (mounted) insertText(text, operation);
           return;
         }
       }
       const text = await navigator.clipboard.readText();
-      if (mounted) t.paste(text);
+      if (mounted) insertText(text, operation);
     } catch {
       if (mounted) {
-        pasteText = "";
-        pasteOpen = true;
+        if (drafts.destination(draft, operation) === "draft") {
+          error = draft.enabled
+            ? "无法读取剪贴板，请在现有草稿框内手动粘贴。"
+            : "无法读取剪贴板，请重新开启草稿模式后在草稿框内手动粘贴。";
+          if (draft.enabled) composer?.focus();
+        } else if (drafts.destination(draft, operation) !== "failed") {
+          pasteOperation = operation;
+          pasteText = "";
+          pasteOpen = true;
+        }
       }
     }
   }
   async function focusTerminal(event: Event) {
     event.preventDefault();
     await tick();
-    t.focus();
+    focusInput();
   }
 </script>
 
@@ -269,6 +356,29 @@
             : "重连中"}</span
     >
     <Button
+      variant={draft.enabled ? "default" : "outline"}
+      size="sm"
+      aria-label="草稿模式"
+      aria-pressed={draft.enabled}
+      disabled={t.connection === "missing"}
+      title={draft.enabled
+        ? "关闭只隐藏草稿，不发送或清空"
+        : draft.updatedWhileHidden
+          ? "隐藏草稿已更新，开启查看；刷新后丢失"
+          : draft.text
+            ? "开启查看保留的草稿；刷新后丢失"
+            : "开启草稿模式"}
+      onclick={() => {
+        drafts.setEnabled(draft, !draft.enabled);
+        t.resetModifiers();
+        if (draft.enabled) {
+          void tick().then(() => composer?.focus());
+        }
+      }}
+      >草稿{#if !draft.enabled && (draft.text || draft.updatedWhileHidden)}
+        ·{/if}</Button
+    >
+    <Button
       variant="ghost"
       size="icon-sm"
       aria-label={fullscreen ? "退出全屏" : "全屏"}
@@ -289,7 +399,8 @@
       aria-label="上传文件"
       title="上传文件"
       disabled={uploads.progress !== null ||
-        t.connection !== "connected" ||
+        (!draft.enabled && t.connection !== "connected") ||
+        t.connection === "missing" ||
         t.exitCode !== null}
       onclick={() => fileInput.click()}
       ><IconUpload class="size-4" aria-hidden="true" /></Button
@@ -363,6 +474,11 @@
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   </header>
+  {#if !draft.enabled && (draft.text || draft.updatedWhileHidden)}
+    <p class="sr-only" role="status">
+      {draft.updatedWhileHidden ? "隐藏草稿已更新" : "有保留的隐藏草稿"} · 开启草稿模式查看；刷新后丢失
+    </p>
+  {/if}
   {#if uploads.progress}
     <div
       class="shrink-0 space-y-1 border-b bg-muted px-3 py-2"
@@ -427,53 +543,96 @@
   >
     <Resizable.PaneGroup direction="horizontal">
       <Resizable.Pane defaultSize={50} minSize={25} class="terminal-pane">
-        <div class="terminal-column">
-          <div class="terminal-area">
-            <div class="terminal-host" bind:this={container}></div>
-            {#if uploads.dragging}
-              <div
-                class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary bg-background/90"
-                role="status"
-              >
-                <p class="text-sm">
-                  {uploads.progress
-                    ? "请等待当前上传完成"
-                    : "松开以上传文件到临时目录"}
-                </p>
+        <div class="terminal-column" bind:clientHeight={terminalHeight}>
+          <Resizable.PaneGroup direction="vertical">
+            <Resizable.Pane
+              defaultSize={100 - composerSize}
+              minSize={20}
+              order={0}
+            >
+              <div class="terminal-column">
+                <div class="terminal-area">
+                  <div class="terminal-host" bind:this={container}></div>
+                  {#if uploads.dragging}
+                    <div
+                      class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary bg-background/90"
+                      role="status"
+                    >
+                      <p class="text-sm">
+                        {uploads.progress
+                          ? "请等待当前上传完成"
+                          : "松开以上传文件到临时目录"}
+                      </p>
+                    </div>
+                  {/if}
+                  {#if t.selection}
+                    <div
+                      class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
+                      role="toolbar"
+                      aria-label="终端文字选择"
+                    >
+                      <Button size="sm" onclick={() => t.copySelection()}
+                        >复制选中</Button
+                      >
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onclick={() => t.clearSelection()}>取消选择</Button
+                      >
+                    </div>
+                  {/if}
+                  {#if t.restoring && t.connection !== "missing"}<div
+                      class="restore-overlay"
+                      role="status"
+                    >
+                      {t.connection === "connected" ? "正在恢复…" : "正在连接…"}
+                    </div>{/if}
+                </div>
+                <SoftKeys
+                  send={softInput}
+                  modifiers={t.modifiers}
+                  toggle={(key) => {
+                    if (draft.enabled) controlNotice();
+                    else t.toggleModifier(key);
+                  }}
+                  paste={() => {
+                    void paste();
+                  }}
+                  keyboard={() => {
+                    if (draft.enabled) composer?.keyboard();
+                    else t.keyboard();
+                  }}
+                />
               </div>
-            {/if}
-            {#if t.selection}
-              <div
-                class="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
-                role="toolbar"
-                aria-label="终端文字选择"
+            </Resizable.Pane>
+            {#if draft.enabled}
+              <Resizable.Handle
+                withHandle
+                class="draft-divider"
+                aria-label="调整草稿面板高度"
+              />
+              <Resizable.Pane
+                order={1}
+                defaultSize={composerSize}
+                minSize={Math.min(
+                  80,
+                  (160 / Math.max(1, (terminalHeight || 500) - 8)) * 100,
+                )}
+                onResize={(size) => (composerSize = size)}
+                class="draft-pane"
               >
-                <Button size="sm" onclick={() => t.copySelection()}
-                  >复制选中</Button
-                >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onclick={() => t.clearSelection()}>取消选择</Button
-                >
-              </div>
+                <TerminalInputComposer
+                  bind:this={composer}
+                  {draft}
+                  {drafts}
+                  unavailable={sendUnavailable}
+                  send={sendDraft}
+                  filePaste={uploads.filePaste}
+                  {controlNotice}
+                />
+              </Resizable.Pane>
             {/if}
-            {#if t.restoring && t.connection !== "missing"}<div
-                class="restore-overlay"
-                role="status"
-              >
-                {t.connection === "connected" ? "正在恢复…" : "正在连接…"}
-              </div>{/if}
-          </div>
-          <SoftKeys
-            send={t.send}
-            modifiers={t.modifiers}
-            toggle={t.toggleModifier}
-            paste={() => {
-              void paste();
-            }}
-            keyboard={t.keyboard}
-          />
+          </Resizable.PaneGroup>
         </div>
       </Resizable.Pane>
       <Resizable.Handle
@@ -487,6 +646,7 @@
             visible={codeShown}
             connection={t.connection}
             paste={insertReference}
+            draftEnabled={draft.enabled}
           />{/if}
       </Resizable.Pane>
     </Resizable.PaneGroup>
@@ -520,7 +680,7 @@
         }}>取消</Button
       ><Button
         onclick={() => {
-          t.paste(pasteText);
+          insertText(pasteText, pasteOperation);
           pasteOpen = false;
         }}>发送</Button
       ></Dialog.Footer
@@ -574,5 +734,8 @@
     onclose={() => {
       closing = false;
     }}
-    onremoved={() => navigate("/")}
+    onremoved={() => {
+      drafts.remove(id);
+      navigate("/");
+    }}
   />{/if}

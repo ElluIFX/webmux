@@ -42,6 +42,7 @@
     onselect,
     lineAction,
     restoreLine = 1,
+    draftEnabled = false,
   }: {
     text: string;
     path: string;
@@ -52,6 +53,7 @@
     onselect: (start: number, end: number) => void;
     lineAction?: Snippet<[row: number]>;
     restoreLine?: number;
+    draftEnabled?: boolean;
   } = $props();
   let host: HTMLDivElement;
   let view: EditorView | undefined;
@@ -467,7 +469,7 @@
     >
     <span class="min-w-0 truncate text-xs text-muted-foreground">
       {coarse
-        ? "点击代码行，再点右侧 ＋ 发送位置"
+        ? `点击代码行，再点右侧 ＋ 发送位置到${draftEnabled ? "草稿" : "终端"}`
         : showGutter
           ? "点击行号；Shift 点击选择终点"
           : "显示行号后可点击行号选择"}

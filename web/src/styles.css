@@ -258,6 +258,45 @@
   padding: env(safe-area-inset-top) env(safe-area-inset-right)
     env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
+.draft-divider {
+  height: 8px !important;
+  touch-action: none;
+  cursor: row-resize;
+}
+.draft-divider > div {
+  background: var(--muted-foreground);
+}
+.draft-pane {
+  min-width: 0;
+  overflow: auto;
+}
+.terminal-composer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.terminal-composer textarea {
+  field-sizing: fixed;
+  min-height: 32px;
+}
+.terminal-header {
+  gap: 4px;
+}
+@media (max-height: 450px) {
+  .terminal-composer {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+  .terminal-header {
+    height: 36px;
+  }
+}
 .terminal-area {
   position: relative;
   flex: 1;

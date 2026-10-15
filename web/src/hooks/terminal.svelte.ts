@@ -46,6 +46,12 @@ export function useTerminal(
   id: string,
   clipboard: { paste: () => void; copySelection: (text: string) => void },
   isVisible: () => boolean = () => true,
+  userInput?: {
+    draftEnabled: () => boolean;
+    focusDraft: () => void;
+    key: (event: KeyboardEvent) => void;
+    insertText: (text: string) => void;
+  },
 ) {
   let terminal: Terminal | undefined;
   let socket: SocketConnection | undefined;
@@ -154,6 +160,51 @@ export function useTerminal(
       term.textarea?.setAttribute("autocapitalize", "off");
       term.textarea?.setAttribute("autocorrect", "off");
       term.textarea?.setAttribute("spellcheck", "false");
+      // Divert user events, never onData: device replies and explicit paste
+      // must retain their normal PTY path while a draft is being edited.
+      const focusDraft = () => {
+        if (userInput?.draftEnabled()) userInput.focusDraft();
+      };
+      const draftPaste = (event: ClipboardEvent) => {
+        if (!userInput?.draftEnabled() || event.clipboardData?.files.length)
+          return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        userInput.insertText(event.clipboardData?.getData("text/plain") ?? "");
+        userInput.focusDraft();
+      };
+      const draftInput = (event: InputEvent) => {
+        if (!userInput?.draftEnabled()) return;
+        // If beforeinput cannot be cancelled, consume its subsequent input
+        // instead. Composition is committed only at compositionend.
+        if (event.type === "beforeinput" && !event.cancelable) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        userInput.focusDraft();
+        if (
+          event.data &&
+          !event.isComposing &&
+          event.inputType !== "insertCompositionText" &&
+          event.inputType !== "insertFromComposition"
+        )
+          userInput.insertText(event.data);
+      };
+      const draftComposition = (event: CompositionEvent) => {
+        if (!userInput?.draftEnabled()) return;
+        event.stopImmediatePropagation();
+        userInput.focusDraft();
+        if (event.type === "compositionend" && event.data)
+          userInput.insertText(event.data);
+      };
+      parent.addEventListener("focusin", focusDraft, true);
+      parent.addEventListener("paste", draftPaste, true);
+      // beforeinput covers browsers dispatching insertion to the previously
+      // focused xterm textarea after focus has already moved.
+      parent.addEventListener("beforeinput", draftInput as EventListener, true);
+      parent.addEventListener("input", draftInput as EventListener, true);
+      parent.addEventListener("compositionstart", draftComposition, true);
+      parent.addEventListener("compositionupdate", draftComposition, true);
+      parent.addEventListener("compositionend", draftComposition, true);
       let stale = false;
       let exited = false;
       let restoreFrame = 0;
@@ -315,6 +366,22 @@ export function useTerminal(
         hasSelection: () => Boolean(selection),
       });
       term.attachCustomKeyEventHandler((event) => {
+        if (userInput?.draftEnabled()) {
+          if (
+            event.type === "keydown" &&
+            (event.ctrlKey || event.metaKey) &&
+            event.key.toLowerCase() === "v"
+          ) {
+            if (event.shiftKey) {
+              event.preventDefault();
+              clipboard.paste();
+            } else userInput.focusDraft();
+          } else {
+            event.preventDefault();
+            userInput.key(event);
+          }
+          return false;
+        }
         if (
           event.type === "keydown" &&
           !event.altKey &&
@@ -367,6 +434,17 @@ export function useTerminal(
         resolution.removeEventListener("change", resolutionChanged);
         document.removeEventListener("visibilitychange", visible);
         detachTouch();
+        parent.removeEventListener("focusin", focusDraft, true);
+        parent.removeEventListener("paste", draftPaste, true);
+        parent.removeEventListener(
+          "beforeinput",
+          draftInput as EventListener,
+          true,
+        );
+        parent.removeEventListener("input", draftInput as EventListener, true);
+        parent.removeEventListener("compositionstart", draftComposition, true);
+        parent.removeEventListener("compositionupdate", draftComposition, true);
+        parent.removeEventListener("compositionend", draftComposition, true);
         input.dispose();
         resize.dispose();
         selected.dispose();
@@ -399,6 +477,14 @@ export function useTerminal(
   });
 
   return {
+    get ready() {
+      return (
+        !!terminal &&
+        connection === "connected" &&
+        !restoring &&
+        exitCode === null
+      );
+    },
     get info() {
       return info;
     },
@@ -431,6 +517,9 @@ export function useTerminal(
     },
     send,
     setFontSize,
+    resetModifiers() {
+      modifiers = { ctrl: false, alt: false };
+    },
     toggleModifier(key: keyof Modifiers) {
       modifiers = { ...modifiers, [key]: !modifiers[key] };
     },

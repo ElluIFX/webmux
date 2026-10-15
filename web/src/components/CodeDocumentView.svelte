@@ -20,6 +20,7 @@
   import CodeReader from "./CodeReader.svelte";
   import { Button } from "$lib/components/ui/button";
   import { IconPlus } from "@tabler/icons-svelte";
+  import type { TextInsertion } from "../terminal-draft.svelte";
   let {
     id,
     active = true,
@@ -27,6 +28,7 @@
     diff,
     status,
     paste,
+    draftEnabled,
     refresh,
     openSide,
     beginOpen,
@@ -40,7 +42,8 @@
     file?: CodeFile;
     diff?: CodeDiff;
     status: string;
-    paste: (text: string) => boolean;
+    paste: (text: string) => TextInsertion;
+    draftEnabled: boolean;
     refresh: () => void;
     openSide: (file: CodeFile, intent: number) => void;
     beginOpen: () => number;
@@ -279,7 +282,8 @@
   }
   function send(reference = preview) {
     if (!reference || status !== "unchanged") return;
-    error = paste(reference) ? "" : "终端未就绪，位置未插入；请连接后重试";
+    error =
+      paste(reference) !== "failed" ? "" : "输入目标未就绪，位置未插入；请重试";
   }
   function expand(gapId: string, direction: "up" | "down" | "all") {
     if (!diffReady || status === "expired") return;
@@ -413,6 +417,7 @@
         canExpand={() => status !== "expired"}
         restoreLine={anchor}
         onselect={select}
+        {draftEnabled}
       >
         {#snippet lineAction(row)}
           {@const reference = referenceAt(row)}
@@ -420,8 +425,8 @@
             <Button
               size="icon"
               class="size-11 border border-border shadow-sm"
-              aria-label={`发送第 ${reference.number} 行位置到终端`}
-              title={`发送第 ${reference.number} 行位置到终端`}
+              aria-label={`发送第 ${reference.number} 行位置到${draftEnabled ? "草稿" : "终端"}`}
+              title={`发送第 ${reference.number} 行位置到${draftEnabled ? "草稿" : "终端"}`}
               disabled={status !== "unchanged"}
               onclick={() => send(reference.text)}
               ><IconPlus class="size-5" aria-hidden="true" /></Button
@@ -446,7 +451,9 @@
         size="sm"
         disabled={!preview || status !== "unchanged"}
         onclick={() => send()}
-        >发送位置到终端{#if start !== undefined}（{start}{end !== undefined &&
+        >发送位置到{draftEnabled
+          ? "草稿"
+          : "终端"}{#if start !== undefined}（{start}{end !== undefined &&
           end !== start
             ? `-${end}`
             : ""} 行）{/if}</Button

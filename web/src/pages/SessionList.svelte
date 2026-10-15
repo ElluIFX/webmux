@@ -27,6 +27,9 @@
   import WorkspaceGroup from "../components/WorkspaceGroup.svelte";
   import AddRepositoryDialog from "../components/AddRepositoryDialog.svelte";
   import RemoveWorktreeDialog from "../components/RemoveWorktreeDialog.svelte";
+  import type { TerminalDrafts } from "../terminal-draft.svelte";
+
+  let { drafts }: { drafts: TerminalDrafts } = $props();
 
   let sessions = $state<SessionInfo[]>([]);
   let repositories = $state<Repository[]>([]);
@@ -153,14 +156,17 @@
         const event = SessionEventSchema.parse(JSON.parse(data));
         if (event.type === "snapshot") {
           sessions = event.sessions;
+          drafts.reconcile(event.sessions.map((session) => session.id));
           loading = false;
         } else if (event.type === "created" || event.type === "updated")
           sessions = [
             ...sessions.filter((s) => s.id !== event.session.id),
             event.session,
           ];
-        else if (event.type === "removed")
+        else if (event.type === "removed") {
+          drafts.remove(event.id);
           sessions = sessions.filter((s) => s.id !== event.id);
+        }
         now = Date.now();
       },
       (state) => {
@@ -453,6 +459,9 @@
   />{/if}
 {#if closing}<CloseSessionDialog
     session={closing}
+    onremoved={() => {
+      if (closing) drafts.remove(closing.id);
+    }}
     onclose={() => {
       closing = null;
     }}

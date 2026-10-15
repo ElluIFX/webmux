@@ -1,23 +1,33 @@
 import { onMount } from "svelte";
 import { uploadFile } from "../api";
 import type { Connection } from "../ws";
+import type {
+  DraftOperation,
+  InputDestination,
+  TextInsertion,
+} from "../terminal-draft.svelte";
 
-// The terminal state and input the upload flow waits on and types into.
+// Connection state is only required when the operation still targets the PTY.
 interface UploadTerminal {
   readonly exitCode: number | null;
   readonly connection: Connection;
   readonly restoring: boolean;
-  paste(text: string): boolean;
   focus(): void;
 }
 
-// Uploads dropped, pasted or picked files to the session's temporary directory
-// and types each quoted path into the terminal once it is live again.
+export interface UploadInput {
+  begin(): DraftOperation;
+  destination(operation: DraftOperation): InputDestination;
+  insert(text: string, operation: DraftOperation): TextInsertion;
+}
+
+// All upload sources share the same operation identity and quoted-path insertion.
 export function useUpload(
   getHost: () => HTMLElement,
   id: string,
   terminal: UploadTerminal,
   setError: (message: string) => void,
+  input: UploadInput,
 ) {
   let progress = $state<{
     name: string;
@@ -32,13 +42,16 @@ export function useUpload(
   let waiter = $state<{
     resolve: () => void;
     reject: (error: Error) => void;
+    operation: DraftOperation;
   } | null>(null);
   let mounted = false;
 
   $effect(() => {
     const current = waiter;
     if (!current) return;
+    const target = input.destination(current.operation);
     if (
+      target === "failed" ||
       terminal.exitCode !== null ||
       terminal.connection === "exited" ||
       terminal.connection === "missing"
@@ -46,16 +59,18 @@ export function useUpload(
       waiter = null;
       current.reject(new Error("终端会话已退出或不存在"));
     } else if (
-      foreground &&
-      terminal.connection === "connected" &&
-      !terminal.restoring
+      target === "draft" ||
+      (foreground && terminal.connection === "connected" && !terminal.restoring)
     ) {
       waiter = null;
       current.resolve();
     }
   });
 
-  async function waitForTerminal(signal: AbortSignal) {
+  async function waitForDestination(
+    signal: AbortSignal,
+    operation: DraftOperation,
+  ) {
     if (signal.aborted) throw new DOMException("操作已取消", "AbortError");
     const { promise, resolve, reject } = Promise.withResolvers<void>();
     const abort = () => reject(new DOMException("操作已取消", "AbortError"));
@@ -64,7 +79,7 @@ export function useUpload(
       30_000,
     );
     signal.addEventListener("abort", abort, { once: true });
-    waiter = { resolve, reject };
+    waiter = { resolve, reject, operation };
     try {
       await promise;
     } finally {
@@ -74,8 +89,9 @@ export function useUpload(
     }
   }
 
-  async function uploadFiles(files: File[]) {
+  async function uploadFiles(files: File[], operation = input.begin()) {
     if (!files.length) return;
+    if (!mounted || input.destination(operation) === "failed") return;
     if (progress) {
       setError("正在上传，请等待当前上传完成。");
       return;
@@ -91,6 +107,8 @@ export function useUpload(
     setError("");
     const current = new AbortController();
     controller = current;
+    let pendingPath = "";
+    let lastTarget: TextInsertion = "failed";
     try {
       for (const [index, file] of files.entries()) {
         progress = {
@@ -108,23 +126,35 @@ export function useUpload(
           },
           current.signal,
         );
-        if (!mounted || current.signal.aborted) return;
+        pendingPath = path;
+        if (!mounted || current.signal.aborted)
+          throw new Error(`文件已上传至 ${path}，但路径未插入：操作已取消`);
         progress.waiting = true;
         progress.percent = 100;
         try {
-          await waitForTerminal(current.signal);
+          await waitForDestination(current.signal, operation);
+          if (!mounted || current.signal.aborted)
+            throw new DOMException("操作已取消", "AbortError");
           // Quote arbitrary filenames safely. Uploading never runs a command.
-          if (!terminal.paste("'" + path.replaceAll("'", "'\\''") + "' "))
-            throw new Error("终端未就绪");
+          lastTarget = input.insert(
+            "'" + path.replaceAll("'", "'\\''") + "' ",
+            operation,
+          );
+          if (lastTarget === "failed") throw new Error("输入目标未就绪");
+          pendingPath = "";
         } catch (err) {
           throw new Error(
-            `文件已上传至 ${path}，但路径未发送：${(err as Error).message}`,
+            `文件已上传至 ${path}，但路径未插入：${(err as Error).message}`,
           );
         }
       }
-      terminal.focus();
+      if (
+        lastTarget === "terminal" &&
+        input.destination(operation) === "terminal"
+      )
+        terminal.focus();
     } catch (err) {
-      if (mounted) setError((err as Error).message);
+      if (mounted || pendingPath) setError((err as Error).message);
     } finally {
       controller = undefined;
       if (mounted) progress = null;

@@ -75,9 +75,10 @@
     {active}
     {status}
     contextId="context"
+    draftEnabled={false}
     paste={(text) => {
       inserted = text;
-      return true;
+      return "terminal";
     }}
     refresh={() => {}}
     beginOpen={() => 1}

@@ -10,9 +10,10 @@
     id="code-session"
     {visible}
     connection="connected"
+    draftEnabled={false}
     paste={(text) => {
       inserted = text;
-      return true;
+      return "terminal";
     }}
   />
 </div>

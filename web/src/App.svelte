@@ -8,6 +8,10 @@
   import * as Card from "$lib/components/ui/card";
   import SessionList from "./pages/SessionList.svelte";
   import Settings from "./pages/Settings.svelte";
+  import { createTerminalDrafts } from "./terminal-draft.svelte";
+
+  const drafts = createTerminalDrafts();
+  let uploadNotice = $state("");
 
   let path = $state(location.pathname);
   let ready = $state(false);
@@ -34,6 +38,8 @@
       path = location.pathname;
     };
     const auth = () => {
+      drafts.clearAll();
+      uploadNotice = "";
       ready = false;
       checking = false;
       error = "Token 无效或已更改";
@@ -42,6 +48,7 @@
     window.addEventListener("webmux:auth", auth);
     void check();
     return () => {
+      drafts.clearAll();
       window.removeEventListener("popstate", change);
       window.removeEventListener("webmux:auth", auth);
     };
@@ -88,7 +95,13 @@
   {#await import("./pages/Terminal.svelte")}
     <p role="status" class="p-6 text-muted-foreground">正在加载终端…</p>
   {:then page}
-    {#key match[1]}<page.default id={match[1]} />{/key}
+    {#key match[1]}<page.default
+        id={match[1]}
+        {drafts}
+        onUploadNotice={(message) => {
+          if (ready) uploadNotice = message;
+        }}
+      />{/key}
   {:catch error}
     <p role="alert" class="p-6 text-destructive">
       {error instanceof Error ? error.message : "终端加载失败"}
@@ -97,5 +110,17 @@
 {:else if path === "/settings"}
   <Settings />
 {:else}
-  <SessionList />
+  <SessionList {drafts} />
+{/if}
+
+{#if ready && uploadNotice}
+  <div
+    class="fixed inset-x-2 top-2 z-50 flex items-start gap-2 rounded-md border bg-card p-3 text-sm shadow-lg"
+    role="alert"
+  >
+    <p class="min-w-0 flex-1 break-all">{uploadNotice}</p>
+    <Button variant="outline" size="sm" onclick={() => (uploadNotice = "")}
+      >关闭</Button
+    >
+  </div>
 {/if}

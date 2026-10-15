@@ -18,16 +18,19 @@
   import { nodeId } from "../code-reference";
   import { Button } from "$lib/components/ui/button";
   import CodeDocumentView from "./CodeDocumentView.svelte";
+  import type { TextInsertion } from "../terminal-draft.svelte";
   let {
     id,
     visible,
     connection,
     paste,
+    draftEnabled,
   }: {
     id: string;
     visible: boolean;
     connection: string;
-    paste: (text: string) => boolean;
+    paste: (text: string) => TextInsertion;
+    draftEnabled: boolean;
   } = $props();
   type Tab = {
     key: string;
@@ -498,6 +501,7 @@
             diff={tab.diff}
             status={tab.status}
             {paste}
+            {draftEnabled}
             refresh={() => void refresh(tab)}
             contextId={context?.contextId ?? ""}
             comparison={tab.comparison}
