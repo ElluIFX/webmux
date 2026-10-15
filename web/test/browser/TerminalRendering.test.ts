@@ -495,6 +495,11 @@ beforeEach(async () => {
 afterEach(async () => {
   try {
     await cleanup();
+    // Terminal disposal waits until xterm's pending viewport frame has read
+    // renderer dimensions. Observer assertions run after that frame.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
     await userEvent.cleanup();
     expect(
       observations
@@ -929,6 +934,59 @@ test("explicit black ANSI input remains readable in dark theme and updates on th
   await expect.poll(ratio).toBeGreaterThanOrEqual(4.49);
 });
 
+test("pending viewport reset after a theme change does not read a disposed renderer", async () => {
+  observeGlyphPixels(true);
+  document.documentElement.classList.add("dark");
+  const { socket, rendered } = await openTerminal();
+  await expectDomText(prompt);
+  const queued: FrameRequestCallback[] = [];
+  const realFrame = window.requestAnimationFrame.bind(window);
+  const realCancel = window.cancelAnimationFrame.bind(window);
+  window.requestAnimationFrame = (callback) => {
+    queued.push(callback);
+    return queued.length;
+  };
+  window.cancelAnimationFrame = () => {};
+  const errors: unknown[] = [];
+  const onError = (event: ErrorEvent) => {
+    errors.push(event.error ?? event.message);
+  };
+  window.addEventListener("error", onError);
+  try {
+    // Viewport.reset() records a zero buffer length and syncs on the next
+    // frame. A resize or scroll during the test records the real length
+    // first; macOS can then run that frame after disposal.
+    socket.receive(1, "\x1b[38;2;0;0;0m中文 input\x1b[0m");
+    const opened = queued.splice(0);
+    const sync = opened.find((callback) =>
+      callback.toString().includes("syncScrollArea"),
+    );
+    if (!sync) throw new Error("missing viewport sync frame");
+    for (const callback of opened) callback(0);
+    document.documentElement.classList.remove("dark");
+    document.documentElement.classList.add("dark");
+    queued.push(sync);
+    await rendered.unmount();
+    window.requestAnimationFrame = realFrame;
+    window.cancelAnimationFrame = realCancel;
+    for (const callback of queued) {
+      try {
+        callback(0);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    await new Promise<void>((resolve) => {
+      realFrame(() => realFrame(() => resolve()));
+    });
+  } finally {
+    window.requestAnimationFrame = realFrame;
+    window.cancelAnimationFrame = realCancel;
+    window.removeEventListener("error", onError);
+  }
+  expect(errors).toEqual([]);
+});
+
 test("native long press selects wide text and dragging copies multiple lines without terminal input or keyboard", async () => {
   observeGlyphPixels(true);
   const { socket } = await openTerminal();
@@ -972,4 +1030,45 @@ test("native long press selects wide text and dragging copies multiple lines wit
   await expect
     .element(page.getByRole("status", { name: "Terminal selection" }))
     .toHaveTextContent("");
+});
+
+function osc52(
+  selection: string,
+  text: string,
+  terminator: "bel" | "st" = "bel",
+) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const encoded = btoa(binary).replace(/=+$/, "");
+  const wrapped = encoded.replace(/(.{4})/g, "$1\n");
+  const end = terminator === "bel" ? "\x07" : "\x1b\\";
+  return `\x1b]52;${selection};${wrapped}${end}`;
+}
+
+async function expectCopied(text: string) {
+  await expect
+    .poll(
+      () =>
+        document.querySelector('[aria-label="Copied terminal text"]')
+          ?.textContent,
+    )
+    .toBe(text);
+}
+
+test("application OSC 52 copy is reported without terminal input or disturbing wide text", async () => {
+  observeGlyphPixels(true);
+  const { socket } = await openTerminal();
+  socket.receive(0, `prefix 中文 tail\r\n${osc52("c", "中文 tail\nsecond")}`);
+  await expectDomText("prefix 中文 tail");
+  await expectCopied("中文 tail\nsecond");
+  const copied = inputText(socket);
+  socket.receive(0, "\x1b]52;c;?\x07");
+  socket.receive(0, "\x1b]52;0;YQ==\x07");
+  await expectCopied("中文 tail\nsecond");
+  socket.receive(0, osc52("p", "primary-中文", "st"));
+  await expectCopied("primary-中文");
+  expect(inputText(socket)).toBe(copied);
+  expect(domText()).toContain("prefix 中文 tail");
+  expect(domText()).not.toContain("primary-中文");
 });

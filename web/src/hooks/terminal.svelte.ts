@@ -17,6 +17,7 @@ import {
   terminalFontFamilyCss,
   terminalLineHeight,
 } from "../fonts";
+import { osc52CopyText } from "../terminalClipboard";
 import "@xterm/xterm/css/xterm.css";
 import "../fonts-terminal.css";
 
@@ -144,6 +145,7 @@ export function useTerminal(
         // xterm's built-in DOM renderer remains available without WebGL.
       }
       const theme = () => {
+        if (disposed) return;
         term.options.theme = terminalTheme();
       };
       const colors = new MutationObserver(theme);
@@ -219,6 +221,15 @@ export function useTerminal(
       const input = term.onData(send);
       const selected = term.onSelectionChange(() => {
         selection = term.getSelection();
+      });
+      // OSC 52 is the application copy request handled by xterm's clipboard
+      // addon. Selection copy (Ctrl+Shift+C and the selection toolbar) already
+      // uses this same callback, which writes the browser clipboard.
+      const oscClipboard = term.parser.registerOscHandler(52, (data) => {
+        const text = osc52CopyText(data);
+        if (text === undefined) return false;
+        clipboard.copySelection(text);
+        return true;
       });
       const resize = term.onResize((size) => {
         if (isVisible() && size.cols > 0 && size.rows > 0)
@@ -588,9 +599,20 @@ export function useTerminal(
         input.dispose();
         resize.dispose();
         selected.dispose();
+        oscClipboard.dispose();
         colors.disconnect();
         ws.close();
-        term.dispose();
+        const dying = term;
+        // Viewport.reset() queues syncScrollArea for the next frame, and that
+        // frame reads RenderService.dimensions. Disposing in this turn removes
+        // the renderer first, so the callback throws after a restore or theme
+        // change. Let that frame, and the scroll refresh it may schedule, run
+        // before the terminal is disposed.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            dying.dispose();
+          });
+        });
         terminal = undefined;
         socket = undefined;
         fit = undefined;
