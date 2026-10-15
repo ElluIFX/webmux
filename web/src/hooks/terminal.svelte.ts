@@ -43,6 +43,7 @@ export function useTerminal(
   getContainer: () => HTMLDivElement,
   id: string,
   clipboard: { paste: () => void; copySelection: (text: string) => void },
+  isVisible: () => boolean = () => true,
 ) {
   let terminal: Terminal | undefined;
   let socket: SocketConnection | undefined;
@@ -63,17 +64,24 @@ export function useTerminal(
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
+  let pasteResult = false;
+  function safeFit() {
+    const parent = getContainer();
+    if (isVisible() && parent?.clientWidth > 0 && parent?.clientHeight > 0)
+      fit?.fit();
+  }
   function send(input: string) {
     const value = modifiedInput(input, modifiers);
     modifiers = { ctrl: false, alt: false };
-    return socket?.send(0, encoder.encode(value));
+    pasteResult = socket?.send(0, encoder.encode(value)) ?? false;
+    return pasteResult;
   }
 
   function setFontSize(value: number) {
     fontSize = Math.max(12, Math.min(20, Math.round(value)));
     if (terminal) {
       terminal.options.fontSize = fontSize;
-      fit?.fit();
+      safeFit();
     }
     store("fontSize", String(fontSize));
   }
@@ -172,13 +180,14 @@ export function useTerminal(
         (state) => {
           connection = state;
           if (state === "connected") {
-            fitAddon.fit();
-            ws.send(
-              1,
-              encoder.encode(
-                JSON.stringify({ cols: term.cols, rows: term.rows }),
-              ),
-            );
+            safeFit();
+            if (isVisible() && term.cols > 0 && term.rows > 0)
+              ws.send(
+                1,
+                encoder.encode(
+                  JSON.stringify({ cols: term.cols, rows: term.rows }),
+                ),
+              );
           }
           if (state === "connecting" || state === "reconnecting")
             restoring = true;
@@ -193,9 +202,10 @@ export function useTerminal(
       const selected = term.onSelectionChange(() => {
         selection = term.getSelection();
       });
-      const resize = term.onResize((size) =>
-        ws.send(1, encoder.encode(JSON.stringify(size))),
-      );
+      const resize = term.onResize((size) => {
+        if (isVisible() && size.cols > 0 && size.rows > 0)
+          ws.send(1, encoder.encode(JSON.stringify(size)));
+      });
       let timer: number | undefined;
       const observer = new ResizeObserver(([entry]) => {
         if (disposed) return;
@@ -220,7 +230,7 @@ export function useTerminal(
           }
         }
         clearTimeout(timer);
-        timer = window.setTimeout(() => fitAddon.fit(), 100);
+        timer = window.setTimeout(() => safeFit(), 100);
       });
       const observeSize = () => {
         try {
@@ -531,11 +541,11 @@ export function useTerminal(
               ? terminalFontFamilyAlt
               : terminalFontFamilyCss;
           term.options.fontFamily = current ?? terminalFontFamilyCss;
-          fitAddon.fit();
+          safeFit();
         });
       };
       document.fonts.addEventListener("loadingdone", remeasure);
-      fitAddon.fit();
+      safeFit();
       if (matchMedia("(pointer: fine)").matches) term.focus();
       return () => {
         disposed = true;
@@ -611,8 +621,17 @@ export function useTerminal(
       modifiers = { ...modifiers, [key]: !modifiers[key] };
     },
     paste(text: string) {
+      if (
+        !terminal ||
+        connection !== "connected" ||
+        restoring ||
+        exitCode !== null
+      )
+        return false;
+      pasteResult = false;
       modifiers = { ctrl: false, alt: false };
-      terminal?.paste(text);
+      terminal.paste(text);
+      return pasteResult;
     },
     keyboard() {
       if (document.activeElement === terminal?.textarea) terminal?.blur();
@@ -633,6 +652,7 @@ export function useTerminal(
           });
       } else socket?.send(2, new Uint8Array());
     },
+    fit: safeFit,
     focus() {
       terminal?.focus();
     },
