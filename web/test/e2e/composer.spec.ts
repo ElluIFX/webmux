@@ -57,29 +57,17 @@ for (const bracketed of [true, false]) {
     await expect(draft(page)).toBeHidden();
     await mode(page).click();
     await expect(draft(page)).toHaveValue(text);
-    await draft(page).evaluate((element: HTMLTextAreaElement) => {
-      element.setSelectionRange(1, 5);
-      element.dispatchEvent(new Event("select"));
-    });
     await send(page).click();
     const wire = text.replaceAll("\n", "\r");
     await expect
       .poll(() => readFile(received, "utf8"))
-      .toBe(bracketed ? `\x1b[200~${wire}\x1b[201~` : wire);
-    await expect(draft(page)).toBeVisible();
-    await expect(draft(page)).toHaveValue(text);
+      .toBe(bracketed ? `\x1b[200~${wire}\x1b[201~\r` : `${wire}\r`);
+    await expect(draft(page)).toBeHidden();
+    await expect(mode(page)).toHaveAttribute("aria-pressed", "false");
     await mode(page).click();
-    await mode(page).click();
-    await expect(draft(page)).toHaveValue(text);
-    expect(
-      await draft(page).evaluate((element: HTMLTextAreaElement) => [
-        element.selectionStart,
-        element.selectionEnd,
-      ]),
-    ).toEqual([1, 5]);
-    await send(page).click();
-    const twice = (bracketed ? `\x1b[200~${wire}\x1b[201~` : wire).repeat(2);
-    await expect.poll(() => readFile(received, "utf8")).toBe(twice);
+    await expect(draft(page)).toHaveValue("");
+    await expect(send(page)).toBeDisabled();
+    await draft(page).fill(text);
     await page.getByRole("button", { name: "清空草稿", exact: true }).click();
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await expect(draft(page)).toHaveValue(text);
@@ -88,7 +76,9 @@ for (const bracketed of [true, false]) {
     await expect(page.getByRole("alertdialog")).toBeHidden();
     await expect(draft(page)).toHaveValue("");
     await expect(send(page)).toBeDisabled();
-    expect(await readFile(received, "utf8")).toBe(twice);
+    expect(await readFile(received, "utf8")).toBe(
+      bracketed ? `\x1b[200~${wire}\x1b[201~\r` : `${wire}\r`,
+    );
     await draft(page).fill("Next draft remains editable");
     await expect(draft(page)).toBeFocused();
     await expect(mode(page)).toHaveAttribute("aria-pressed", "true");
@@ -150,14 +140,17 @@ test("code references and uploaded paths join the same draft without PTY input",
   await send(page).click();
   await expect
     .poll(() => readFile(received, "utf8"))
-    .toBe(`\x1b[200~${expected}\x1b[201~`);
+    .toBe(`\x1b[200~${expected}\x1b[201~\r`);
   if (info.project.use.isMobile)
     await page
       .locator(".terminal-header")
       .getByRole("button", { name: "代码", exact: true })
       .click();
   await expect(page.getByRole("region", { name: "代码工作区" })).toBeVisible();
-  await expect(draft(page)).toHaveValue(expected);
+  await expect(draft(page)).toBeHidden();
+  await expect(mode(page)).toHaveAttribute("aria-pressed", "false");
+  await mode(page).click();
+  await expect(draft(page)).toHaveValue("");
   await info.attach("composer-code.png", {
     body: await page.screenshot(),
     contentType: "image/png",
@@ -404,7 +397,7 @@ test("composition, direct keyboard entry and disconnect never bypass explicit se
   await send(page).click();
   await expect
     .poll(() => readFile(received, "utf8"))
-    .toBe("\x1b[200~Keep after disconnect\x1b[201~");
+    .toBe("\x1b[200~Keep after disconnect\x1b[201~\r");
 });
 
 test("an uploaded path waiting for terminal recovery moves to draft immediately", async ({

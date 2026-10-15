@@ -23,7 +23,6 @@ export function attachTouchGestures(
   let touchY = 0;
   let wheelY = 0;
   let remainder = 0;
-  let moved = false;
   let pinchDistance = 0;
   let pinchFont = options.fontSize();
   let longPress: number | undefined;
@@ -79,7 +78,6 @@ export function attachTouchGestures(
       end: row * term.cols + end,
     };
     selecting = true;
-    moved = true;
     term.blur();
     term.select(start, row, end - start);
   };
@@ -122,13 +120,9 @@ export function attachTouchGestures(
     // Suppress compatibility mousedown events that would refocus xterm after a swipe.
     event.preventDefault();
     event.stopPropagation();
-    if (!pointers.size) {
-      moved = false;
-      term.clearSelection();
-    }
+    if (!pointers.size) term.clearSelection();
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (pointers.size > 1) {
-      moved = true;
       cancelLongPress();
       selecting = false;
       selectionAnchor = undefined;
@@ -159,7 +153,6 @@ export function attachTouchGestures(
     }
     // Preserve sub-row scrolling, but tolerate finger jitter before long press.
     if (Math.hypot(point.x - touchX, point.y - wheelY) >= 8) cancelLongPress();
-    moved = true;
     if (pointers.size === 2 && pinchDistance > 0) {
       options.setFontSize((pinchFont * distance()) / pinchDistance);
     } else if (pointers.size === 1) {
@@ -189,26 +182,22 @@ export function attachTouchGestures(
     if (disposed || !pointers.has(event.pointerId)) return;
     event.stopPropagation();
     cancelLongPress();
-    if (moved) event.preventDefault();
+    event.preventDefault();
     pointers.delete(event.pointerId);
     if (parent.hasPointerCapture(event.pointerId))
       parent.releasePointerCapture(event.pointerId);
     if (pointers.size) rebasePointers();
-    else {
-      clearPointers();
-      if (!moved) term.focus();
-    }
+    else clearPointers();
   };
   const pointerCancel = (event: PointerEvent) => {
     if (disposed || !pointers.has(event.pointerId)) return;
     event.stopPropagation();
-    moved = true;
     clearPointers();
   };
   const blockNativeTouch = (event: TouchEvent) => {
     event.stopPropagation();
     if (selecting) event.preventDefault();
-    if (event.type === "touchmove" || (event.type === "touchend" && moved))
+    if (event.type === "touchmove" || event.type === "touchend")
       event.preventDefault();
   };
   const contextMenu = (event: MouseEvent) => {

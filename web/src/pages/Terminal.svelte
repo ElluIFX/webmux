@@ -38,7 +38,7 @@
   } = $props();
   const draft = untrack(() => drafts.get(id));
   let composer = $state<TerminalInputComposer>();
-  let composerSize = $state(50);
+  let composerSize = $state(25);
   let terminalHeight = $state(0);
   let sending = false;
   let pasteOperation: DraftOperation | undefined;
@@ -51,6 +51,7 @@
   let copyOpen = $state(false);
   let copyText = $state("");
   let settingsOpen = $state(false);
+  let forceSoftKeys = $state(false);
   let fullscreen = $state(false);
   let fullscreenBusy = $state(false);
   let ownsFullscreen = false;
@@ -116,7 +117,13 @@
     const text = draft.text;
     try {
       if (t.paste(text)) {
-        error = "";
+        if (t.send("\r")) {
+          drafts.clear(draft);
+          drafts.setEnabled(draft, false);
+          error = "";
+        } else {
+          error = "草稿已粘贴，但回车未发送；请检查终端后手动提交。";
+        }
       } else error = "终端未就绪，草稿未发送；请恢复连接后手动重试。";
     } finally {
       sending = false;
@@ -327,7 +334,11 @@
   }
 </script>
 
-<div class="terminal-page" style:height={`${viewport.height}px`}>
+<div
+  class="terminal-page"
+  class:force-soft-keys={forceSoftKeys}
+  style:height={`${viewport.height}px`}
+>
   <header
     class="terminal-header flex h-11 shrink-0 items-center gap-2 border-b bg-card px-2"
   >
@@ -354,29 +365,6 @@
           : t.connection === "missing"
             ? "不存在"
             : "重连中"}</span
-    >
-    <Button
-      variant={draft.enabled ? "default" : "outline"}
-      size="sm"
-      aria-label="草稿模式"
-      aria-pressed={draft.enabled}
-      disabled={t.connection === "missing"}
-      title={draft.enabled
-        ? "关闭只隐藏草稿，不发送或清空"
-        : draft.updatedWhileHidden
-          ? "隐藏草稿已更新，开启查看；刷新后丢失"
-          : draft.text
-            ? "开启查看保留的草稿；刷新后丢失"
-            : "开启草稿模式"}
-      onclick={() => {
-        drafts.setEnabled(draft, !draft.enabled);
-        t.resetModifiers();
-        if (draft.enabled) {
-          void tick().then(() => composer?.focus());
-        }
-      }}
-      >草稿{#if !draft.enabled && (draft.text || draft.updatedWhileHidden)}
-        ·{/if}</Button
     >
     <Button
       variant="ghost"
@@ -428,6 +416,29 @@
       }}><IconArrowDown class="size-4" aria-hidden="true" /></Button
     >
     <Button
+      variant={draft.enabled ? "default" : "outline"}
+      size="sm"
+      aria-label="草稿模式"
+      aria-pressed={draft.enabled}
+      disabled={t.connection === "missing"}
+      title={draft.enabled
+        ? "关闭只隐藏草稿，不发送或清空"
+        : draft.updatedWhileHidden
+          ? "隐藏草稿已更新，开启查看；刷新后丢失"
+          : draft.text
+            ? "开启查看保留的草稿；刷新后丢失"
+            : "开启草稿模式"}
+      onclick={() => {
+        drafts.setEnabled(draft, !draft.enabled);
+        t.resetModifiers();
+        if (draft.enabled) {
+          void tick().then(() => composer?.focus());
+        }
+      }}
+      >草稿{#if !draft.enabled && (draft.text || draft.updatedWhileHidden)}
+        ·{/if}</Button
+    >
+    <Button
       variant="outline"
       size="sm"
       aria-pressed={codeShown}
@@ -463,6 +474,9 @@
             settingsOpen = true;
           }}>字体大小</DropdownMenu.Item
         >
+        <DropdownMenu.CheckboxItem bind:checked={forceSoftKeys}>
+          强制显示底部工具栏
+        </DropdownMenu.CheckboxItem>
         <DropdownMenu.Separator />
         <DropdownMenu.Item
           variant="destructive"

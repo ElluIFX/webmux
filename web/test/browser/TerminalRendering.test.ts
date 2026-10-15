@@ -862,8 +862,8 @@ test("pinch resizes real cells and rebases one-finger scrolling, while cancel an
   await expectDomText(prompt);
   const beforeTap = inputText(socket);
   await commands.nativeTouchGesture([gestureStart(socket)]);
-  expect(document.activeElement).toBe(textarea);
-  expect(focused).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).not.toBe(textarea);
+  expect(focused).not.toHaveBeenCalled();
   expect(inputText(socket)).toBe(beforeTap);
   syntheticPointerCapture(target);
 
@@ -884,7 +884,7 @@ test("pinch resizes real cells and rebases one-finger scrolling, while cancel an
   pointer(target, "pointerup", 2, start);
   expect(socket.sent).toHaveLength(sent);
   expect(socket.closeCount).toBe(1);
-  expect(focused).toHaveBeenCalledTimes(1);
+  expect(focused).not.toHaveBeenCalled();
 });
 
 test("terminal measures the bundled monospace face before painting", async () => {
