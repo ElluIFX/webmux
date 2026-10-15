@@ -324,8 +324,14 @@
   max-width: 40%;
 }
 .diff-gutter .cm-gutterElement {
+  padding: 0 6px 0 4px;
   white-space: pre;
-  min-width: 6em;
+}
+.diff-gutter-number {
+  display: inline-block;
+  min-width: var(--diff-gutter-digits, 2ch);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 .cm-line {
   tab-size: 4;

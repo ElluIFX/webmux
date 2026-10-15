@@ -115,14 +115,26 @@
     }
   }
   class NumberMarker extends GutterMarker {
-    label: string;
-    constructor(label: string) {
+    oldLine: string;
+    newLine: string;
+    constructor(oldLine: string, newLine: string) {
       super();
-      this.label = label;
+      this.oldLine = oldLine;
+      this.newLine = newLine;
+    }
+    eq(other: NumberMarker) {
+      return other.oldLine === this.oldLine && other.newLine === this.newLine;
     }
     toDOM() {
       const element = document.createElement("span");
-      element.textContent = this.label;
+      const column = (text: string) => {
+        const cell = document.createElement("span");
+        cell.className = "diff-gutter-number";
+        cell.textContent = text;
+        return cell;
+      };
+      // The separator keeps textContent as "old new" for selection/copy.
+      element.append(column(this.oldLine), " ", column(this.newLine));
       return element;
     }
   }
@@ -245,7 +257,8 @@
             lineMarker: (v, l) => {
               const m = mapping?.[v.state.doc.lineAt(l.from).number - 1];
               return new NumberMarker(
-                m ? `${m.oldLine || ""} ${m.newLine || ""}` : "",
+                m?.oldLine ? String(m.oldLine) : "",
+                m?.newLine ? String(m.newLine) : "",
               );
             },
             domEventHandlers: {
@@ -271,6 +284,17 @@
               },
             },
           }),
+      EditorView.editorAttributes.of({
+        style: `--diff-gutter-digits: ${
+          String(
+            (mapping ?? []).reduce(
+              (max, line) =>
+                line ? Math.max(max, line.oldLine, line.newLine) : max,
+              0,
+            ),
+          ).length
+        }ch`,
+      }),
       StateField.define({
         create: () => Decoration.none,
         update(value, transaction) {
