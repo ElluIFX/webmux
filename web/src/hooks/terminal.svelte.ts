@@ -19,6 +19,7 @@ import {
 } from "../fonts";
 import { osc52CopyText } from "../terminalClipboard";
 import { attachTouchGestures } from "./touch";
+import { hasTouchInput } from "../touchInput";
 import "@xterm/xterm/css/xterm.css";
 import "../fonts-terminal.css";
 
@@ -423,7 +424,7 @@ export function useTerminal(
       };
       document.fonts.addEventListener("loadingdone", remeasure);
       safeFit();
-      if (matchMedia("(pointer: fine)").matches) term.focus();
+      if (!hasTouchInput()) term.focus();
       return () => {
         disposed = true;
         cancelAnimationFrame(remeasureFrame);

@@ -11,6 +11,7 @@
   import { useTerminal } from "../hooks/terminal.svelte";
   import { useViewport } from "../hooks/viewport.svelte";
   import { useUpload } from "../hooks/upload.svelte";
+  import { hasTouchInput } from "../touchInput";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Label } from "$lib/components/ui/label";
@@ -318,7 +319,7 @@
           error = draft.enabled
             ? "无法读取剪贴板，请在现有草稿框内手动粘贴。"
             : "无法读取剪贴板，请重新开启草稿模式后在草稿框内手动粘贴。";
-          if (draft.enabled) composer?.focus();
+          if (draft.enabled && !hasTouchInput()) composer?.focus();
         } else if (drafts.destination(draft, operation) !== "failed") {
           pasteOperation = operation;
           pasteText = "";
@@ -329,6 +330,7 @@
   }
   async function focusTerminal(event: Event) {
     event.preventDefault();
+    if (hasTouchInput()) return;
     await tick();
     focusInput();
   }
@@ -431,7 +433,7 @@
       onclick={() => {
         drafts.setEnabled(draft, !draft.enabled);
         t.resetModifiers();
-        if (draft.enabled) {
+        if (draft.enabled && !hasTouchInput()) {
           void tick().then(() => composer?.focus());
         }
       }}

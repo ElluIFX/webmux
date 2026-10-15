@@ -372,7 +372,7 @@
 .terminal-page.force-soft-keys .soft-keys {
   display: flex;
 }
-@media (pointer: coarse) {
+@media (any-pointer: coarse) {
   .soft-keys {
     display: flex;
   }

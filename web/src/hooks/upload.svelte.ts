@@ -1,6 +1,7 @@
 import { onMount } from "svelte";
 import { uploadFile } from "../api";
 import type { Connection } from "../ws";
+import { hasTouchInput } from "../touchInput";
 import type {
   DraftOperation,
   InputDestination,
@@ -150,7 +151,8 @@ export function useUpload(
       }
       if (
         lastTarget === "terminal" &&
-        input.destination(operation) === "terminal"
+        input.destination(operation) === "terminal" &&
+        !hasTouchInput()
       )
         terminal.focus();
     } catch (err) {

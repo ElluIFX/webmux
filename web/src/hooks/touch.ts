@@ -2,8 +2,10 @@ import type { Terminal } from "@xterm/xterm";
 
 type TouchPoint = { x: number; y: number };
 
-// Touch scrolling, pinch font sizing and long-press selection on the terminal
-// host. Returns the cleanup that releases captured pointers and listeners.
+// Touch and stylus scrolling, pinch font sizing and long-press selection on
+// the terminal host. Pens are handled like fingers so a stylus tap cannot focus
+// xterm and raise the virtual keyboard. Returns the cleanup that releases
+// captured pointers and listeners.
 export function attachTouchGestures(
   term: Terminal,
   parent: HTMLElement,
@@ -116,7 +118,7 @@ export function attachTouchGestures(
     pinchDistance = 0;
   };
   const pointerDown = (event: PointerEvent) => {
-    if (disposed || event.pointerType !== "touch") return;
+    if (disposed || event.pointerType === "mouse") return;
     // Suppress compatibility mousedown events that would refocus xterm after a swipe.
     event.preventDefault();
     event.stopPropagation();
@@ -139,7 +141,7 @@ export function attachTouchGestures(
     rebasePointers();
   };
   const pointerMove = (event: PointerEvent) => {
-    if (disposed || event.pointerType !== "touch") return;
+    if (disposed || event.pointerType === "mouse") return;
     const point = pointers.get(event.pointerId);
     if (!point) return;
     event.preventDefault();

@@ -91,6 +91,67 @@ test("mobile terminal taps leave input unfocused and only the keyboard button to
   await expect(input).not.toBeFocused();
 });
 
+test("touch tablets with a fine primary pointer only raise the keyboard from the keyboard button", async ({
+  page,
+  workDir,
+}, testInfo) => {
+  test.skip(!testInfo.project.use.isMobile, "Requires a touch screen");
+  // Many tablets (stylus, keyboard covers, Android desktop modes) report a
+  // fine primary pointer while still raising a virtual keyboard on focus.
+  await page.addInitScript(() => {
+    const native = window.matchMedia.bind(window);
+    window.matchMedia = (query: string) => {
+      const result = native(query);
+      if (
+        !query.includes("any-pointer") &&
+        /pointer: (fine|coarse)/.test(query)
+      )
+        Object.defineProperty(result, "matches", {
+          value: query.includes("pointer: fine"),
+        });
+      return result;
+    };
+  });
+  const id = await createShell(page, "Tablet keyboard", workDir);
+  const input = page.locator(".xterm-helper-textarea");
+  const keyboard = page
+    .getByRole("complementary", { name: "终端软键" })
+    .getByRole("button", { name: "唤起或收起键盘" });
+
+  await expect(keyboard).toBeVisible();
+  await expect(input).not.toBeFocused();
+  await page.goto("/");
+  await page.locator(`a[href="/s/${id}"]`).first().tap();
+  await expect(page.locator(".restore-overlay")).toBeHidden();
+  await expect(input).not.toBeFocused();
+
+  // A stylus tap arrives as a pen pointer, not a touch pointer.
+  const bounds = (await page.locator(".xterm-screen").boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  const pen = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+    button: "left" as const,
+    clickCount: 1,
+    pointerType: "pen" as const,
+  };
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...pen });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...pen });
+  await cdp.detach();
+  await expect(input).not.toBeFocused();
+
+  await page.getByRole("button", { name: "终端菜单", exact: true }).tap();
+  await page.getByRole("menuitem", { name: "字体大小", exact: true }).tap();
+  const dialog = page.getByRole("dialog", { name: "字体大小" });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(input).not.toBeFocused();
+
+  await keyboard.tap();
+  await expect(input).toBeFocused();
+});
+
 test("desktop devices can force the soft-key toolbar on and off through the terminal menu", async ({
   page,
   workDir,
