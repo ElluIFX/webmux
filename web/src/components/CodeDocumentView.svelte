@@ -324,8 +324,15 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden">
-  <div class="shrink-0 space-y-1 border-b p-2 text-xs">
-    <p class="break-all">{doc?.absolutePath}</p>
+  <div
+    class="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-2 py-1 text-xs"
+  >
+    <p
+      class="min-w-0 grow basis-40 truncate text-left text-muted-foreground [direction:rtl]"
+      title={doc?.absolutePath}
+    >
+      <bdi>{doc?.absolutePath}</bdi>
+    </p>
     {#if file}<div class="flex gap-2">
         <Button variant="outline" size="sm" onclick={() => (mode = "file")}
           >完整文件</Button
@@ -338,26 +345,26 @@
       </div>{/if}
     {#if shownDiff}
       {#if shownDiff.change.oldPath !== shownDiff.change.newPath}
-        <p class="break-all">
+        <p class="basis-full break-all">
           {shownDiff.change.oldPath} → {shownDiff.change.newPath}
         </p>
       {/if}
-      <div class="flex flex-wrap items-center gap-2">
-        <label
-          >引用来源 <select
-            aria-label="引用来源"
-            bind:value={side}
-            onchange={() => {
-              start = undefined;
-              end = undefined;
-              reader?.clearLineAction();
-            }}
-            class="rounded border bg-background p-1"
-            ><option value="new">新侧 ({shownDiff.new.source})</option><option
-              value="old">旧侧 ({shownDiff.old.source})</option
-            ></select
-          ></label
-        >
+      <label class="flex items-center gap-1"
+        >引用来源 <select
+          aria-label="引用来源"
+          bind:value={side}
+          onchange={() => {
+            start = undefined;
+            end = undefined;
+            reader?.clearLineAction();
+          }}
+          class="h-7 rounded border bg-background px-1"
+          ><option value="new">新侧 ({shownDiff.new.source})</option><option
+            value="old">旧侧 ({shownDiff.old.source})</option
+          ></select
+        ></label
+      >
+      <div class="flex gap-2">
         <Button variant="outline" size="sm" onclick={() => void full("old")}
           >旧侧完整文件</Button
         >
@@ -366,7 +373,7 @@
         >
       </div>
     {/if}
-    {#if status !== "unchanged"}<p role="status">
+    {#if status !== "unchanged"}<p role="status" class="basis-full">
         {status === "updated"
           ? "内容已更新"
           : status === "missing"
@@ -379,7 +386,9 @@
           onclick={refresh}>刷新文档</Button
         >
       </p>{/if}
-    {#if shownDiff?.kind === "metadata" || doc?.kind !== "text"}<p>
+    {#if shownDiff?.kind === "metadata" || doc?.kind !== "text"}<p
+        class="basis-full"
+      >
         {shownDiff?.reason || doc?.reason}
       </p>{/if}
   </div>

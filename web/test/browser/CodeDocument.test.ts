@@ -95,7 +95,7 @@ test("large deletions stay virtualized and retain the actual old line numbers", 
   expect(document.querySelectorAll(".cm-line").length).toBeLessThan(150);
   expect(document.querySelectorAll(".code-reader *").length).toBeLessThan(1000);
   await page.getByRole("button", { name: "跳转行" }).click();
-  await page.getByRole("textbox", { name: /Go to line/ }).fill("19800");
+  await page.getByRole("textbox", { name: "跳转到行" }).fill("19800");
   await userEvent.keyboard("{Enter}");
   await expect
     .element(page.getByLabelText("只读代码"))

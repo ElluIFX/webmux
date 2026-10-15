@@ -153,7 +153,7 @@ test("read ordinary files, independent tabs, updates and insert a line without E
     .getByRole("button", { name: "文件内查找" })
     .filter({ visible: true })
     .click();
-  await expect(page.locator(".cm-search:visible")).toBeVisible();
+  await expect(page.locator(".code-search:visible")).toBeVisible();
   expect(await readFile(join(workDir, "clean.go"), "utf8")).toBe(
     "new version\n",
   );
@@ -316,8 +316,8 @@ test("frozen Git diff, ignored navigation and complete source documents", async 
     .getByRole("button", { name: "跳转行" })
     .filter({ visible: true })
     .click();
-  await page.locator(".cm-goto-line:visible input").fill("50");
-  await page.locator(".cm-goto-line:visible input").press("Enter");
+  await page.locator(".code-goto-line:visible input").fill("50");
+  await page.locator(".code-goto-line:visible input").press("Enter");
   await expect(
     page.getByLabel("只读代码").filter({ visible: true }),
   ).toContainText("indexed line 50");

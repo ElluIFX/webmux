@@ -406,13 +406,21 @@
   class="code-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background"
   aria-label="代码工作区"
 >
-  <header class="flex shrink-0 flex-wrap items-center gap-2 border-b p-2">
+  <header class="flex shrink-0 items-center gap-2 border-b px-2 py-1">
     <Button variant="outline" size="sm" onclick={() => (navOpen = !navOpen)}
       >{navOpen ? "收起导航" : "文件导航"}</Button
     >
-    <span class="min-w-0 flex-1 truncate text-xs" title={context?.rootPath}
-      >{context?.rootPath ?? "读取代码目录…"}</span
-    >
+    {#if navStatus}<span
+        role="status"
+        class="min-w-0 flex-1 truncate text-xs text-amber-600 dark:text-amber-400"
+        title={navStatus}>{navStatus}</span
+      ><Button variant="outline" size="sm" onclick={() => void load()}
+        >刷新导航</Button
+      >
+    {:else}<span
+        class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+        title={context?.rootPath}>{context?.rootPath ?? "读取代码目录…"}</span
+      >{/if}
     <Button
       variant="outline"
       size="sm"
@@ -425,18 +433,14 @@
   </header>
   {#if error}<p
       role="alert"
-      class="shrink-0 break-all p-2 text-sm text-destructive"
+      class="shrink-0 px-2 py-1 text-sm break-all text-destructive"
     >
       {error}
     </p>{/if}
-  {#if context?.reason}<p class="shrink-0 p-2 text-xs text-muted-foreground">
+  {#if context?.reason}<p
+      class="shrink-0 px-2 py-1 text-xs text-muted-foreground"
+    >
       {context.reason}
-    </p>{/if}
-  {#if navStatus}<p role="status" class="shrink-0 p-2 text-xs">
-      {navStatus}
-      <Button variant="outline" size="sm" onclick={() => void load()}
-        >刷新导航</Button
-      >
     </p>{/if}
   <div class="code-inner flex min-h-0 flex-1 overflow-hidden">
     {#if navOpen}<nav
@@ -602,26 +606,25 @@
       </nav>{/if}
     <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div
-        class="flex shrink-0 overflow-x-auto border-b"
+        class="flex shrink-0 overflow-x-auto border-b [scrollbar-width:thin]"
         role="tablist"
         aria-label="文件标签"
       >
-        {#each tabs as tab (tab.key)}<div
-            class="flex shrink-0 items-center border-r"
-          >
+        {#each tabs as tab (tab.key)}
+          {@const path = tab.file?.document.path ?? tab.diff?.new.path ?? ""}
+          {@const meta = `${tab.diff ? tab.diff.change.group : tab.file?.document.source}${tab.status !== "unchanged" ? " ●" : ""}`}
+          <div class="flex shrink-0 items-center border-r">
             <button
               role="tab"
               aria-selected={active === tab.key}
-              class="max-w-52 truncate p-2 text-xs"
+              aria-label={`${path} · ${meta}`}
+              title={path}
+              class="px-2 py-1.5 text-xs whitespace-nowrap"
               onclick={() => activate(tab.key)}
-              >{tab.file?.document.path ?? tab.diff?.new.path} · {tab.diff
-                ? tab.diff.change.group
-                : tab.file?.document.source}{tab.status !== "unchanged"
-                ? " ●"
-                : ""}</button
+              >{path.slice(path.lastIndexOf("/") + 1)} · {meta}</button
             >
             <button
-              aria-label={`关闭 ${tab.file?.document.path ?? tab.diff?.new.path}`}
+              aria-label={`关闭 ${path}`}
               class="px-2"
               onclick={() => close(tab.key)}>×</button
             >

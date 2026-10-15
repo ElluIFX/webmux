@@ -31,14 +31,14 @@ test("read-only virtualized full file, real line selection, search and goto", as
     .element(page.getByLabelText("Selected reference"))
     .toMatchTextContent(new RegExp("2-4"));
   await page.getByRole("button", { name: "跳转行" }).click();
-  await page.getByRole("textbox", { name: /Go to line/ }).fill("900");
+  await page.getByRole("textbox", { name: "跳转到行" }).fill("900");
   await userEvent.keyboard("{Enter}");
   await expect
     .element(page.getByLabelText("只读代码"))
     .toMatchTextContent(new RegExp("const line900 = 900;"));
   await page.getByRole("button", { name: "文件内查找" }).click();
-  await page.getByRole("textbox", { name: "Find" }).fill("line850");
-  await page.getByRole("button", { name: "next", exact: true }).click();
+  await page.getByRole("textbox", { name: "查找" }).fill("line850");
+  await page.getByRole("button", { name: "下一个匹配", exact: true }).click();
   await expect
     .element(page.getByLabelText("只读代码"))
     .toMatchTextContent(new RegExp("const line850 = 850;"));

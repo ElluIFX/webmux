@@ -1,10 +1,12 @@
 <script lang="ts">
   import { mount, onMount, unmount, type Snippet } from "svelte";
   import {
+    Compartment,
     EditorState,
     StateEffect,
     StateField,
     Text,
+    type Extension,
   } from "@codemirror/state";
   import {
     EditorView,
@@ -17,17 +19,19 @@
     Decoration,
     WidgetType,
   } from "@codemirror/view";
-  import {
-    search,
-    searchKeymap,
-    openSearchPanel,
-    gotoLine,
-  } from "@codemirror/search";
+  import { openSearchPanel } from "@codemirror/search";
+  import { codeReaderPanels, openGotoLine } from "../code-reader-panels";
   import {
     syntaxHighlighting,
     defaultHighlightStyle,
   } from "@codemirror/language";
   import { Button } from "$lib/components/ui/button";
+  import {
+    IconListNumbers,
+    IconNumber,
+    IconSearch,
+  } from "@tabler/icons-svelte";
+  import { store, stored } from "../api";
   import type { CodeBlock, CodeLine } from "../code-diff-model";
   import CodeDiffGap from "./CodeDiffGap.svelte";
   let {
@@ -58,6 +62,16 @@
   let actionLine = $state<number>();
   let actionTop = $state<number>();
   const pickLine = StateEffect.define<number | undefined>();
+  const gutterSlot = new Compartment();
+  let lineGutter: Extension = [];
+  let showGutter = $state(stored("codeLineNumbers", "show") !== "hide");
+  function toggleGutter() {
+    showGutter = !showGutter;
+    store("codeLineNumbers", showGutter ? "show" : "hide");
+    view?.dispatch({
+      effects: gutterSlot.reconfigure(showGutter ? lineGutter : []),
+    });
+  }
   export function clearLineAction() {
     actionLine = undefined;
     actionTop = undefined;
@@ -201,11 +215,44 @@
       }
     };
     document.addEventListener("selectionchange", selectionChanged);
+    lineGutter = mapping
+      ? gutter({
+          class: "diff-gutter",
+          lineMarker: (v, l) => {
+            const m = mapping?.[v.state.doc.lineAt(l.from).number - 1];
+            return new NumberMarker(
+              m?.oldLine ? String(m.oldLine) : "",
+              m?.newLine ? String(m.newLine) : "",
+            );
+          },
+          domEventHandlers: {
+            click: (v, l, e) => {
+              if (!mapping?.[v.state.doc.lineAt(l.from).number - 1])
+                return false;
+              select(
+                v.state.doc.lineAt(l.from).number,
+                (e as MouseEvent).shiftKey,
+              );
+              return true;
+            },
+          },
+        })
+      : lineNumbers({
+          domEventHandlers: {
+            click: (v, l, e) => {
+              select(
+                v.state.doc.lineAt(l.from).number,
+                (e as MouseEvent).shiftKey,
+              );
+              return true;
+            },
+          },
+        });
+
     const extensions = [
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
-      search(),
-      keymap.of(searchKeymap),
+      codeReaderPanels(),
       syntaxHighlighting(defaultHighlightStyle),
       highlightActiveLine(),
       highlightSpecialChars(),
@@ -216,7 +263,22 @@
           fontFamily: "var(--font-mono, monospace)",
         },
         ".cm-content": { minWidth: "100%" },
-        ".cm-gutters": { cursor: "pointer" },
+        ".cm-gutters": {
+          cursor: "pointer",
+          backgroundColor: "var(--muted)",
+          color: "var(--muted-foreground)",
+          borderRight: "1px solid var(--border)",
+        },
+        ".cm-activeLineGutter": {
+          backgroundColor: "var(--accent)",
+          color: "var(--foreground)",
+        },
+        ".cm-panels": {
+          backgroundColor: "var(--background)",
+          color: "var(--foreground)",
+        },
+        ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
+        ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
         ".code-line-picked": {
           boxShadow: "inset 3px 0 var(--primary)",
           outline: "1px solid var(--primary)",
@@ -251,39 +313,7 @@
           return false;
         },
       }),
-      mapping
-        ? gutter({
-            class: "diff-gutter",
-            lineMarker: (v, l) => {
-              const m = mapping?.[v.state.doc.lineAt(l.from).number - 1];
-              return new NumberMarker(
-                m?.oldLine ? String(m.oldLine) : "",
-                m?.newLine ? String(m.newLine) : "",
-              );
-            },
-            domEventHandlers: {
-              click: (v, l, e) => {
-                if (!mapping?.[v.state.doc.lineAt(l.from).number - 1])
-                  return false;
-                select(
-                  v.state.doc.lineAt(l.from).number,
-                  (e as MouseEvent).shiftKey,
-                );
-                return true;
-              },
-            },
-          })
-        : lineNumbers({
-            domEventHandlers: {
-              click: (v, l, e) => {
-                select(
-                  v.state.doc.lineAt(l.from).number,
-                  (e as MouseEvent).shiftKey,
-                );
-                return true;
-              },
-            },
-          }),
+      gutterSlot.of(showGutter ? lineGutter : []),
       EditorView.editorAttributes.of({
         style: `--diff-gutter-digits: ${
           String(
@@ -412,19 +442,37 @@
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-  <div class="flex shrink-0 gap-2 border-b px-2 py-1">
+  <div class="flex shrink-0 items-center gap-1 border-b px-1 py-0.5">
     <Button
       variant="ghost"
-      size="sm"
-      onclick={() => view && openSearchPanel(view)}>文件内查找</Button
+      size="icon-sm"
+      aria-label="文件内查找"
+      title="文件内查找"
+      onclick={() => view && openSearchPanel(view)}
+      ><IconSearch aria-hidden="true" /></Button
     >
-    <Button variant="ghost" size="sm" onclick={() => view && gotoLine(view)}
-      >跳转行</Button
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label="跳转行"
+      title="跳转行"
+      onclick={() => view && openGotoLine(view)}
+      ><IconListNumbers aria-hidden="true" /></Button
     >
-    <span class="self-center text-xs text-muted-foreground">
+    <Button
+      variant={showGutter ? "secondary" : "ghost"}
+      size="icon-sm"
+      aria-label="显示行号"
+      title={showGutter ? "隐藏行号" : "显示行号"}
+      aria-pressed={showGutter}
+      onclick={toggleGutter}><IconNumber aria-hidden="true" /></Button
+    >
+    <span class="min-w-0 truncate text-xs text-muted-foreground">
       {coarse
         ? "点击代码行，再点右侧 ＋ 发送位置"
-        : "点击行号；Shift 点击选择终点"}
+        : showGutter
+          ? "点击行号；Shift 点击选择终点"
+          : "显示行号后可点击行号选择"}
     </span>
   </div>
   <div class="relative min-h-0 flex-1 overflow-hidden">
