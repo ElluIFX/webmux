@@ -18,6 +18,7 @@ import {
   terminalLineHeight,
 } from "../fonts";
 import { osc52CopyText } from "../terminalClipboard";
+import { attachTouchGestures } from "./touch";
 import "@xterm/xterm/css/xterm.css";
 import "../fonts-terminal.css";
 
@@ -125,9 +126,6 @@ export function useTerminal(
       fit = fitAddon;
       term.loadAddon(fitAddon);
       term.open(parent);
-      const terminalElement = term.element!;
-      const screen =
-        terminalElement.querySelector<HTMLElement>(".xterm-screen")!;
       let webgl: WebglAddon | undefined;
       const useDomRenderer = () => {
         if (!webgl) return;
@@ -311,237 +309,11 @@ export function useTerminal(
       };
       document.addEventListener("visibilitychange", visible);
 
-      type TouchPoint = { x: number; y: number };
-      const pointers = new Map<number, TouchPoint>();
-      let firstPoint: TouchPoint | undefined;
-      let secondPoint: TouchPoint | undefined;
-      let touchX = 0;
-      let touchY = 0;
-      let wheelY = 0;
-      let remainder = 0;
-      let moved = false;
-      let pinchDistance = 0;
-      let pinchFont = fontSize;
-      let longPress: number | undefined;
-      let selecting = false;
-      let selectionAnchor: { start: number; end: number } | undefined;
-      const cancelLongPress = () => {
-        clearTimeout(longPress);
-        longPress = undefined;
-      };
-      const cellAt = (point: TouchPoint) => {
-        const bounds = screen.getBoundingClientRect();
-        const column = Math.max(
-          0,
-          Math.min(
-            term.cols - 1,
-            Math.floor(((point.x - bounds.left) / bounds.width) * term.cols),
-          ),
-        );
-        const row =
-          term.buffer.active.viewportY +
-          Math.max(
-            0,
-            Math.min(
-              term.rows - 1,
-              Math.floor(((point.y - bounds.top) / bounds.height) * term.rows),
-            ),
-          );
-        const line = term.buffer.active.getLine(row);
-        // The trailing cell of a wide CJK/emoji glyph belongs to its leading cell.
-        const start =
-          line?.getCell(column)?.getWidth() === 0 ? column - 1 : column;
-        const width = line?.getCell(start)?.getWidth() || 1;
-        return { row, column: start, width, line };
-      };
-      const startSelection = (point: TouchPoint) => {
-        const { row, column, width, line } = cellAt(point);
-        if (!line) return;
-        let start = column;
-        let end = column + width;
-        const isWord = (col: number) =>
-          /[\p{L}\p{N}\p{M}_]/u.test(line.getCell(col)?.getChars() ?? "");
-        if (isWord(column)) {
-          while (start > 0) {
-            const previous =
-              line.getCell(start - 1)?.getWidth() === 0 ? start - 2 : start - 1;
-            if (!isWord(previous)) break;
-            start = previous;
-          }
-          while (end < term.cols && isWord(end))
-            end += line.getCell(end)?.getWidth() || 1;
-        }
-        selectionAnchor = {
-          start: row * term.cols + start,
-          end: row * term.cols + end,
-        };
-        selecting = true;
-        moved = true;
-        term.blur();
-        term.select(start, row, end - start);
-      };
-      const extendSelection = (point: TouchPoint) => {
-        if (!selectionAnchor) return;
-        const { row, column, width } = cellAt(point);
-        const position = row * term.cols + column;
-        const start = Math.min(selectionAnchor.start, position);
-        const end = Math.max(selectionAnchor.end, position + width);
-        term.select(
-          start % term.cols,
-          Math.floor(start / term.cols),
-          end - start,
-        );
-      };
-      const distance = () =>
-        Math.hypot(
-          firstPoint!.x - secondPoint!.x,
-          firstPoint!.y - secondPoint!.y,
-        );
-      const rebasePointers = () => {
-        const points = pointers.values();
-        firstPoint = points.next().value;
-        secondPoint = points.next().value;
-        touchX = firstPoint?.x ?? 0;
-        touchY = firstPoint?.y ?? 0;
-        wheelY = touchY;
-        remainder = 0;
-        pinchDistance = pointers.size === 2 ? distance() : 0;
-        pinchFont = fontSize;
-      };
-      const clearPointers = () => {
-        cancelLongPress();
-        selecting = false;
-        selectionAnchor = undefined;
-        for (const id of pointers.keys()) {
-          pointers.delete(id);
-          if (parent.hasPointerCapture(id)) parent.releasePointerCapture(id);
-        }
-        firstPoint = undefined;
-        secondPoint = undefined;
-        remainder = 0;
-        pinchDistance = 0;
-      };
-      const pointerDown = (event: PointerEvent) => {
-        if (disposed || event.pointerType !== "touch") return;
-        // Suppress compatibility mousedown events that would refocus xterm after a swipe.
-        event.preventDefault();
-        event.stopPropagation();
-        if (!pointers.size) {
-          moved = false;
-          term.clearSelection();
-        }
-        pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-        if (pointers.size > 1) {
-          moved = true;
-          cancelLongPress();
-          selecting = false;
-          selectionAnchor = undefined;
-        } else {
-          const point = { x: event.clientX, y: event.clientY };
-          longPress = window.setTimeout(() => {
-            if (!disposed && pointers.size === 1 && longPress !== undefined)
-              startSelection(point);
-          }, 500);
-        }
-        // DOM terminal rows are replaced while scrolling or repainting a TUI.
-        // Capture to the stable host, not the row originally touched.
-        parent.setPointerCapture(event.pointerId);
-        rebasePointers();
-      };
-      const pointerMove = (event: PointerEvent) => {
-        if (disposed || event.pointerType !== "touch") return;
-        const point = pointers.get(event.pointerId);
-        if (!point) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (point.x === event.clientX && point.y === event.clientY) return;
-        point.x = event.clientX;
-        point.y = event.clientY;
-        if (selecting) {
-          extendSelection(point);
-          return;
-        }
-        // Preserve sub-row scrolling, but tolerate finger jitter before long press.
-        if (Math.hypot(point.x - touchX, point.y - wheelY) >= 8)
-          cancelLongPress();
-        moved = true;
-        if (pointers.size === 2 && pinchDistance > 0) {
-          setFontSize((pinchFont * distance()) / pinchDistance);
-        } else if (pointers.size === 1) {
-          const rowHeight = screen.getBoundingClientRect().height / term.rows;
-          if (rowHeight <= 0) return;
-          remainder += (touchY - point.y) / rowHeight;
-          const lines = Math.trunc(remainder);
-          // Let xterm choose normal history, mouse reports or alternate-buffer
-          // cursor keys, exactly as for a desktop wheel.
-          for (let count = Math.abs(lines); count > 0; count--) {
-            terminalElement.dispatchEvent(
-              new WheelEvent("wheel", {
-                bubbles: true,
-                cancelable: true,
-                deltaMode: WheelEvent.DOM_DELTA_LINE,
-                deltaY: lines > 0 ? 1 : -1,
-                clientX: touchX,
-                clientY: wheelY,
-              }),
-            );
-          }
-          remainder -= lines;
-          touchY = point.y;
-        }
-      };
-      const pointerUp = (event: PointerEvent) => {
-        if (disposed || !pointers.has(event.pointerId)) return;
-        event.stopPropagation();
-        cancelLongPress();
-        if (moved) event.preventDefault();
-        pointers.delete(event.pointerId);
-        if (parent.hasPointerCapture(event.pointerId))
-          parent.releasePointerCapture(event.pointerId);
-        if (pointers.size) rebasePointers();
-        else {
-          clearPointers();
-          if (!moved) term.focus();
-        }
-      };
-      const pointerCancel = (event: PointerEvent) => {
-        if (disposed || !pointers.has(event.pointerId)) return;
-        event.stopPropagation();
-        moved = true;
-        clearPointers();
-      };
-      const blockNativeTouch = (event: TouchEvent) => {
-        event.stopPropagation();
-        if (selecting) event.preventDefault();
-        if (event.type === "touchmove" || (event.type === "touchend" && moved))
-          event.preventDefault();
-      };
-      parent.addEventListener("pointerdown", pointerDown, true);
-      parent.addEventListener("pointermove", pointerMove, true);
-      parent.addEventListener("pointerup", pointerUp, true);
-      parent.addEventListener("pointercancel", pointerCancel, true);
-      parent.addEventListener("lostpointercapture", pointerCancel, true);
-      parent.addEventListener("touchstart", blockNativeTouch, {
-        capture: true,
-        passive: true,
+      const detachTouch = attachTouchGestures(term, parent, {
+        fontSize: () => fontSize,
+        setFontSize,
+        hasSelection: () => Boolean(selection),
       });
-      parent.addEventListener("touchmove", blockNativeTouch, {
-        capture: true,
-        passive: false,
-      });
-      parent.addEventListener("touchend", blockNativeTouch, {
-        capture: true,
-        passive: false,
-      });
-      parent.addEventListener("touchcancel", blockNativeTouch, {
-        capture: true,
-        passive: true,
-      });
-      const contextMenu = (event: MouseEvent) => {
-        // Native touch menus target xterm's hidden input, not its rendered buffer.
-        if (pointers.size || selecting || selection) event.preventDefault();
-      };
-      parent.addEventListener("contextmenu", contextMenu);
       term.attachCustomKeyEventHandler((event) => {
         if (
           event.type === "keydown" &&
@@ -594,17 +366,7 @@ export function useTerminal(
         observer.disconnect();
         resolution.removeEventListener("change", resolutionChanged);
         document.removeEventListener("visibilitychange", visible);
-        clearPointers();
-        parent.removeEventListener("pointerdown", pointerDown, true);
-        parent.removeEventListener("pointermove", pointerMove, true);
-        parent.removeEventListener("pointerup", pointerUp, true);
-        parent.removeEventListener("pointercancel", pointerCancel, true);
-        parent.removeEventListener("lostpointercapture", pointerCancel, true);
-        parent.removeEventListener("touchstart", blockNativeTouch, true);
-        parent.removeEventListener("touchmove", blockNativeTouch, true);
-        parent.removeEventListener("touchend", blockNativeTouch, true);
-        parent.removeEventListener("touchcancel", blockNativeTouch, true);
-        parent.removeEventListener("contextmenu", contextMenu);
+        detachTouch();
         input.dispose();
         resize.dispose();
         selected.dispose();

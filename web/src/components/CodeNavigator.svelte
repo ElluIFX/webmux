@@ -1,0 +1,203 @@
+<script lang="ts">
+  import type { z } from "zod";
+  import CodeChangesList from "./CodeChangesList.svelte";
+  import {
+    CodeChangesSchema,
+    CodeContextSchema,
+    type CodeChange,
+    type CodeListing,
+  } from "../schemas";
+  import { Button } from "$lib/components/ui/button";
+  import * as Tabs from "$lib/components/ui/tabs";
+
+  let {
+    context,
+    listing,
+    changes,
+    changesError,
+    pending,
+    changesEnabled,
+    nav = $bindable("files"),
+    query = $bindable(""),
+    directory = $bindable(""),
+    includeIgnored = $bindable(false),
+    changeGroup = $bindable(""),
+    changeQuery = $bindable(""),
+    changeSearch = $bindable(""),
+    load,
+    openFile,
+    openDiff,
+  }: {
+    context: z.infer<typeof CodeContextSchema> | undefined;
+    listing: CodeListing | undefined;
+    changes: z.infer<typeof CodeChangesSchema> | undefined;
+    changesError: string;
+    pending: boolean;
+    changesEnabled: boolean;
+    nav: string;
+    query: string;
+    directory: string;
+    includeIgnored: boolean;
+    changeGroup: string;
+    changeQuery: string;
+    changeSearch: string;
+    load: (append?: boolean) => void;
+    openFile: (path: string, nodeId: string) => void;
+    openDiff: (change: CodeChange) => void;
+  } = $props();
+</script>
+
+<nav
+  class="code-navigation flex min-h-0 shrink-0 flex-col overflow-hidden border-r"
+  aria-label="文件与修改导航"
+>
+  <Tabs.Root
+    value={nav}
+    onValueChange={(v) => {
+      nav = v;
+      load();
+    }}
+  >
+    <Tabs.List class="w-full"
+      ><Tabs.Trigger value="files">文件</Tabs.Trigger><Tabs.Trigger
+        value="changes">修改</Tabs.Trigger
+      ></Tabs.List
+    >
+  </Tabs.Root>
+  {#if nav === "files"}
+    <form
+      class="flex flex-col gap-1 p-2"
+      onsubmit={(e) => {
+        e.preventDefault();
+        load();
+      }}
+    >
+      <input
+        aria-label="搜索文件路径"
+        placeholder="文件名或路径"
+        bind:value={query}
+        class="min-w-0 rounded border bg-background p-1 text-sm"
+      />
+      <Button size="sm" variant="outline" type="submit">搜索路径</Button>
+      <label class="text-xs"
+        ><input
+          type="checkbox"
+          bind:checked={includeIgnored}
+          disabled={!context?.ignoreAvailable}
+          onchange={() => load()}
+        /> 显示忽略项</label
+      >
+    </form>
+    <div class="flex flex-wrap gap-1 p-2 text-xs" aria-label="路径导航">
+      <button
+        onclick={() => {
+          directory = "";
+          query = "";
+          load();
+        }}>根目录</button
+      >
+      {#each directory.split("/").filter(Boolean) as part, i}<span>/</span
+        ><button
+          class="break-all"
+          onclick={() => {
+            directory = directory
+              .split("/")
+              .slice(0, i + 1)
+              .join("/");
+            query = "";
+            load();
+          }}>{part}</button
+        >{/each}
+    </div>
+    <div class="min-h-0 flex-1 overflow-auto p-1">
+      {#each listing?.children ?? [] as node (node.nodeId)}
+        <button
+          class="block w-full rounded px-2 py-1 text-left text-xs hover:bg-muted"
+          title={node.path}
+          disabled={node.kind === "special" ||
+            node.kind === "boundary" ||
+            node.kind === "symlink"}
+          onclick={() => {
+            if (node.kind === "directory") {
+              directory = node.path;
+              query = "";
+              load();
+            } else openFile(node.path, node.nodeId);
+          }}
+        >
+          <span class="break-all"
+            >{node.kind === "directory"
+              ? "▸ "
+              : node.kind === "boundary"
+                ? "边界 "
+                : ""}{query ? node.path : node.name}</span
+          >
+          {node.gitStatus}{node.ignored ? " · 忽略" : ""}{node.linkTarget
+            ? ` → ${node.linkTarget}`
+            : ""}
+        </button>
+      {/each}
+      {#if listing?.nextCursor}<Button
+          size="sm"
+          variant="outline"
+          onclick={() => load(true)}>下一页</Button
+        >{/if}
+      {#if listing?.limited || listing?.complete === false}<p
+          role="status"
+          class="p-2 text-xs"
+        >
+          结果受限，请收窄路径；未列出全部文件。
+        </p>{/if}
+      {#if listing?.children.length === 0 && !pending}<p class="p-2 text-xs">
+          没有匹配项
+        </p>{/if}
+    </div>
+  {:else if !context?.diffAvailable}<p class="p-2 text-xs">Git 差异不可用</p>
+  {:else}
+    <label class="flex items-center gap-2 px-2 pt-2 text-xs"
+      >来源
+      <select
+        aria-label="修改来源"
+        class="min-w-0 flex-1 rounded border bg-background p-1"
+        bind:value={changeGroup}
+        onchange={() => load()}
+      >
+        <option value="">全部来源</option><option value="unstaged"
+          >未暂存</option
+        ><option value="staged">已暂存</option><option value="untracked"
+          >未跟踪</option
+        >
+      </select>
+    </label>
+    <form
+      class="flex gap-1 p-2"
+      onsubmit={(e) => {
+        e.preventDefault();
+        changeQuery = changeSearch;
+        load();
+      }}
+    >
+      <input
+        aria-label="筛选修改路径"
+        class="min-w-0 flex-1 rounded border bg-background p-1 text-xs"
+        bind:value={changeSearch}
+        placeholder="筛选修改路径"
+      />
+      <Button type="submit" variant="outline" size="sm">筛选修改</Button>
+    </form>
+    {#if changesError}<Button variant="outline" size="sm" onclick={() => load()}
+        >刷新修改列表</Button
+      >{/if}
+    <CodeChangesList
+      entries={changes?.entries ?? []}
+      total={changes?.total ?? 0}
+      nextCursor={changes?.nextCursor ?? ""}
+      version={`${changes?.contentVersion ?? ""}:${changeQuery}:${changeGroup}`}
+      group={changeGroup}
+      {pending}
+      enabled={changesEnabled}
+      onmore={() => load(true)}
+      onopen={openDiff}
+    />
+  {/if}
+</nav>

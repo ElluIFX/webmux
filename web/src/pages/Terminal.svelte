@@ -7,9 +7,10 @@
     IconMinimize,
     IconUpload,
   } from "@tabler/icons-svelte";
-  import { apiBuffer, navigate, statusText, uploadFile } from "../api";
+  import { apiBuffer, navigate, statusText } from "../api";
   import { useTerminal } from "../hooks/terminal.svelte";
   import { useViewport } from "../hooks/viewport.svelte";
+  import { useUpload } from "../hooks/upload.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Label } from "$lib/components/ui/label";
@@ -23,20 +24,6 @@
   let { id }: { id: string } = $props();
   let container: HTMLDivElement;
   let fileInput: HTMLInputElement;
-  let dragging = $state(false);
-  let upload = $state<{
-    name: string;
-    percent: number;
-    index: number;
-    total: number;
-    waiting: boolean;
-  } | null>(null);
-  let uploadController: AbortController | undefined;
-  let uploadWaiter = $state<{
-    resolve: () => void;
-    reject: (error: Error) => void;
-  } | null>(null);
-  let foreground = $state(!document.hidden);
   let error = $state("");
   let closing = $state(false);
   let pasteOpen = $state(false);
@@ -97,46 +84,17 @@
     },
     terminalVisible,
   );
-  $effect(() => {
-    const waiter = uploadWaiter;
-    if (!waiter) return;
-    if (
-      t.exitCode !== null ||
-      t.connection === "exited" ||
-      t.connection === "missing"
-    ) {
-      uploadWaiter = null;
-      waiter.reject(new Error("终端会话已退出或不存在"));
-    } else if (foreground && t.connection === "connected" && !t.restoring) {
-      uploadWaiter = null;
-      waiter.resolve();
-    }
-  });
-
-  function filePaste(event: ClipboardEvent) {
-    const files = Array.from(event.clipboardData?.files ?? []);
-    if (!files.length) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    pasteOpen = false;
-    void uploadFiles(files);
-  }
+  const uploads = useUpload(
+    () => container,
+    untrack(() => id),
+    t,
+    (message) => {
+      error = message;
+    },
+  );
 
   onMount(() => {
     mounted = true;
-    // bind:this is cleared before onMount teardown; retain the listener owner.
-    const host = container;
-    let foregroundFrame = 0;
-    const visibilityChanged = () => {
-      cancelAnimationFrame(foregroundFrame);
-      foreground = false;
-      // Let foreground reconnect handlers invalidate the old socket first.
-      if (!document.hidden)
-        foregroundFrame = requestAnimationFrame(() => {
-          foreground = !document.hidden;
-        });
-    };
-    document.addEventListener("visibilitychange", visibilityChanged);
     const media = matchMedia("(min-width:1024px)");
     const layout = () => {
       desktop = media.matches;
@@ -148,49 +106,9 @@
     };
     changed();
     document.addEventListener("fullscreenchange", changed);
-    // Capture before xterm consumes paste/drop events; text still uses xterm.
-    let dragDepth = 0;
-    const dragEnter = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes("Files")) return;
-      event.preventDefault();
-      dragging = true;
-      dragDepth++;
-    };
-    const dragOver = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes("Files")) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = upload ? "none" : "copy";
-    };
-    const dragLeave = () => {
-      if (--dragDepth <= 0) {
-        dragDepth = 0;
-        dragging = false;
-      }
-    };
-    const drop = (event: DragEvent) => {
-      if (!event.dataTransfer?.types.includes("Files")) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      dragDepth = 0;
-      dragging = false;
-      void uploadFiles(Array.from(event.dataTransfer.files));
-    };
-    host.addEventListener("paste", filePaste, true);
-    host.addEventListener("dragenter", dragEnter, true);
-    host.addEventListener("dragover", dragOver, true);
-    host.addEventListener("dragleave", dragLeave, true);
-    host.addEventListener("drop", drop, true);
     return () => {
       media.removeEventListener("change", layout);
-      document.removeEventListener("visibilitychange", visibilityChanged);
-      cancelAnimationFrame(foregroundFrame);
       mounted = false;
-      uploadController?.abort();
-      host.removeEventListener("paste", filePaste, true);
-      host.removeEventListener("dragenter", dragEnter, true);
-      host.removeEventListener("dragover", dragOver, true);
-      host.removeEventListener("dragleave", dragLeave, true);
-      host.removeEventListener("drop", drop, true);
       document.removeEventListener("fullscreenchange", changed);
       if (
         ownsFullscreen &&
@@ -269,80 +187,6 @@
       error = (err as Error).message;
     }
   }
-  async function waitForUploadTerminal(signal: AbortSignal) {
-    if (signal.aborted) throw new DOMException("操作已取消", "AbortError");
-    const { promise, resolve, reject } = Promise.withResolvers<void>();
-    const abort = () => reject(new DOMException("操作已取消", "AbortError"));
-    const timeout = window.setTimeout(
-      () => reject(new Error("等待终端恢复超时")),
-      30_000,
-    );
-    signal.addEventListener("abort", abort, { once: true });
-    uploadWaiter = { resolve, reject };
-    try {
-      await promise;
-    } finally {
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
-      uploadWaiter = null;
-    }
-  }
-  async function uploadFiles(files: File[]) {
-    if (!files.length) return;
-    if (upload) {
-      error = "正在上传，请等待当前上传完成。";
-      return;
-    }
-    if (
-      t.exitCode !== null ||
-      t.connection === "exited" ||
-      t.connection === "missing"
-    ) {
-      error = "终端会话已退出或不存在，无法上传文件。";
-      return;
-    }
-    error = "";
-    const controller = new AbortController();
-    uploadController = controller;
-    try {
-      for (const [index, file] of files.entries()) {
-        upload = {
-          name: file.name,
-          percent: 0,
-          index: index + 1,
-          total: files.length,
-          waiting: false,
-        };
-        const { path } = await uploadFile(
-          id,
-          file,
-          (percent) => {
-            if (upload) upload.percent = percent;
-          },
-          controller.signal,
-        );
-        if (!mounted || controller.signal.aborted) return;
-        upload.waiting = true;
-        upload.percent = 100;
-        try {
-          await waitForUploadTerminal(controller.signal);
-          // Quote arbitrary filenames safely. Uploading never runs a command.
-          if (!t.paste("'" + path.replaceAll("'", "'\\''") + "' "))
-            throw new Error("终端未就绪");
-        } catch (err) {
-          throw new Error(
-            `文件已上传至 ${path}，但路径未发送：${(err as Error).message}`,
-          );
-        }
-      }
-      t.focus();
-    } catch (err) {
-      if (mounted) error = (err as Error).message;
-    } finally {
-      uploadController = undefined;
-      if (mounted) upload = null;
-    }
-  }
 
   async function paste() {
     try {
@@ -368,7 +212,7 @@
           );
         }
         if (files.length) {
-          await uploadFiles(files);
+          await uploads.uploadFiles(files);
           return;
         }
         const textItem = items.find((item) =>
@@ -444,7 +288,7 @@
       size="icon-sm"
       aria-label="上传文件"
       title="上传文件"
-      disabled={upload !== null ||
+      disabled={uploads.progress !== null ||
         t.connection !== "connected" ||
         t.exitCode !== null}
       onclick={() => fileInput.click()}
@@ -458,7 +302,7 @@
       onchange={() => {
         const files = Array.from(fileInput.files ?? []);
         fileInput.value = "";
-        void uploadFiles(files);
+        void uploads.uploadFiles(files);
       }}
     />
     <Button
@@ -519,30 +363,28 @@
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   </header>
-  {#if upload}
+  {#if uploads.progress}
     <div
       class="shrink-0 space-y-1 border-b bg-muted px-3 py-2"
       aria-label="文件上传状态"
     >
       <div class="flex items-center gap-3 text-xs" role="status">
         <span class="min-w-0 flex-1 truncate"
-          >{upload.waiting
+          >{uploads.progress.waiting
             ? "文件已上传，等待终端恢复："
-            : "正在上传 "}{upload.name}{upload.total > 1
-            ? `（${upload.index}/${upload.total}）`
+            : "正在上传 "}{uploads.progress.name}{uploads.progress.total > 1
+            ? `（${uploads.progress.index}/${uploads.progress.total}）`
             : ""}</span
         >
-        <span>{upload.percent}%</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onclick={() => uploadController?.abort()}>取消</Button
+        <span>{uploads.progress.percent}%</span>
+        <Button variant="ghost" size="sm" onclick={() => uploads.cancel()}
+          >取消</Button
         >
       </div>
       <progress
         aria-label="文件上传进度"
         max={100}
-        value={upload.percent}
+        value={uploads.progress.percent}
         class="block h-1 w-full accent-primary"
       ></progress>
     </div>
@@ -588,13 +430,15 @@
         <div class="terminal-column">
           <div class="terminal-area">
             <div class="terminal-host" bind:this={container}></div>
-            {#if dragging}
+            {#if uploads.dragging}
               <div
                 class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-2 border-dashed border-primary bg-background/90"
                 role="status"
               >
                 <p class="text-sm">
-                  {upload ? "请等待当前上传完成" : "松开以上传文件到临时目录"}
+                  {uploads.progress
+                    ? "请等待当前上传完成"
+                    : "松开以上传文件到临时目录"}
                 </p>
               </div>
             {/if}
@@ -659,7 +503,9 @@
     >
     <Textarea
       aria-label="粘贴内容"
-      onpaste={filePaste}
+      onpaste={(event) => {
+        if (uploads.filePaste(event)) pasteOpen = false;
+      }}
       bind:value={pasteText}
       class="max-h-[50dvh] min-h-40 overflow-y-auto font-mono"
       autocapitalize="off"
