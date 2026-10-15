@@ -235,3 +235,42 @@ test("denied OSC 52 copy exposes the text for manual copying", async ({
     "osc52_fallback",
   );
 });
+
+test("long denied copy keeps the dialog inside the viewport and scrolls its text", async ({
+  page,
+  workDir,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: () =>
+        Promise.reject(
+          new DOMException("Permission denied", "NotAllowedError"),
+        ),
+    });
+  });
+  await createShell(page, "OSC 52 long fallback", workDir);
+  await runCommand(
+    page,
+    `printf '\\033]52;c;%s\\a' "$(seq 1 400 | base64 | tr -d '\\n')"`,
+  );
+  const dialog = page.getByRole("dialog", { name: "复制终端文字" });
+  const text = page.getByRole("textbox", { name: "复制内容" });
+  await expect(dialog).toBeVisible();
+  await expect(text).toHaveValue(
+    Array.from({ length: 400 }, (_, i) => `${i + 1}\n`).join(""),
+  );
+  await expect(dialog).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("button", { name: "关闭" })).toBeInViewport({
+    ratio: 1,
+  });
+  const scroll = await text.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return {
+      overflows: element.scrollHeight > element.clientHeight,
+      atEnd:
+        element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+    };
+  });
+  expect(scroll).toEqual({ overflows: true, atEnd: true });
+});

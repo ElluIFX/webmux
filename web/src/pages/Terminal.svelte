@@ -661,7 +661,7 @@
       aria-label="粘贴内容"
       onpaste={filePaste}
       bind:value={pasteText}
-      class="min-h-40 font-mono"
+      class="max-h-[50dvh] min-h-40 overflow-y-auto font-mono"
       autocapitalize="off"
       autocorrect="off"
       spellcheck={false}
@@ -692,7 +692,7 @@
       aria-label="复制内容"
       readonly
       value={copyText}
-      class="min-h-40 font-mono"
+      class="max-h-[50dvh] min-h-40 overflow-y-auto font-mono"
     />
     <Dialog.Footer
       ><Button
