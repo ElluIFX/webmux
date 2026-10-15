@@ -160,12 +160,21 @@ export function useTerminal(
       let exited = false;
       let restoreFrame = 0;
       let restoreVersion = 0;
+      // Snapshots replay output whose OSC 52 copies already ran when it was
+      // live. xterm parses writes and runs their callbacks in order, so an
+      // empty write's callback opens the replay window exactly where the
+      // snapshot starts and the snapshot's callback closes it.
+      let replaying = false;
       const restore = (payload: Uint8Array) => {
         const version = ++restoreVersion;
         cancelAnimationFrame(restoreFrame);
         restoring = true;
         term.reset();
+        term.write("", () => {
+          replaying = true;
+        });
         term.write(payload, () => {
+          replaying = false;
           if (disposed || version !== restoreVersion) return;
           restoreFrame = requestAnimationFrame(() => {
             if (disposed || version !== restoreVersion) return;
@@ -228,7 +237,7 @@ export function useTerminal(
       const oscClipboard = term.parser.registerOscHandler(52, (data) => {
         const text = osc52CopyText(data);
         if (text === undefined) return false;
-        clipboard.copySelection(text);
+        if (!replaying) clipboard.copySelection(text);
         return true;
       });
       const resize = term.onResize((size) => {

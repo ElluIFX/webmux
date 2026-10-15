@@ -236,6 +236,43 @@ test("denied OSC 52 copy exposes the text for manual copying", async ({
   );
 });
 
+test("closed OSC 52 copy dialog does not reopen when the terminal is entered again", async ({
+  page,
+  workDir,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.clipboard, "writeText", {
+      configurable: true,
+      value: () =>
+        Promise.reject(
+          new DOMException("Permission denied", "NotAllowedError"),
+        ),
+    });
+  });
+  const name = "OSC 52 re-entry";
+  await createShell(page, name, workDir);
+  await runCommand(page, `${osc52Command("osc52_first")}; echo first-done`);
+  const dialog = page.getByRole("dialog", { name: "复制终端文字" });
+  const text = page.getByRole("textbox", { name: "复制内容" });
+  await expect(text).toHaveValue("osc52_first");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole("button", { name: "返回会话列表", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.getByRole("link", { name, exact: true }).click();
+  await expect(page.locator(".terminal-header").getByRole("status")).toHaveText(
+    "已连接",
+  );
+  await expect(page.locator(".restore-overlay")).toBeHidden();
+  await expectTerminalLine(page, "first-done");
+  await expect(dialog).toBeHidden();
+
+  // Live copies after re-entry still open the dialog.
+  await runCommand(page, osc52Command("osc52_second"));
+  await expect(text).toHaveValue("osc52_second");
+});
+
 test("long denied copy keeps the dialog inside the viewport and scrolls its text", async ({
   page,
   workDir,

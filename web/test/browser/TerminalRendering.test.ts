@@ -1072,3 +1072,27 @@ test("application OSC 52 copy is reported without terminal input or disturbing w
   expect(domText()).toContain("prefix 中文 tail");
   expect(domText()).not.toContain("primary-中文");
 });
+
+test("replayed OSC 52 copies are not repeated while live copies still are", async () => {
+  observeGlyphPixels(true);
+  const { socket } = await openTerminal();
+  const copies = () =>
+    document.querySelector('[aria-label="Copy requests"]')?.textContent;
+  const replayed = async (text: string) => {
+    socket.receive(1, `${snapshot}${osc52("c", "replayed-old")}${text}\r\n`);
+    await expectDomText(text);
+    await expect
+      .element(page.getByRole("status", { name: "Terminal restoration" }))
+      .toHaveTextContent("ready");
+  };
+  await replayed("first replay");
+  expect(copies()).toBe("0");
+  socket.receive(0, osc52("c", "live-new"));
+  await expectCopied("live-new");
+  expect(copies()).toBe("1");
+  await replayed("second replay");
+  socket.receive(0, "after replay\r\n");
+  await expectDomText("after replay");
+  expect(copies()).toBe("1");
+  expect(inputText(socket)).toBe("");
+});

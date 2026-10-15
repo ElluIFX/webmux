@@ -3,6 +3,7 @@
 
   let container: HTMLDivElement;
   let copied = $state("");
+  let copies = $state(0);
   const terminal = useTerminal(() => container, "terminal-render-fixture", {
     paste: () => {
       throw new Error(
@@ -11,6 +12,7 @@
     },
     copySelection: (text) => {
       copied = text;
+      copies++;
     },
   });
 </script>
@@ -30,6 +32,7 @@
   <button onclick={() => terminal.focus()}>Focus terminal input</button>
   <output aria-label="Terminal selection">{terminal.selection}</output>
   <output aria-label="Copied terminal text">{copied}</output>
+  <output aria-label="Copy requests">{copies}</output>
   <button onclick={() => terminal.copySelection()}>Copy selection</button>
   <button onclick={() => terminal.clearSelection()}>Clear selection</button>
 </div>
