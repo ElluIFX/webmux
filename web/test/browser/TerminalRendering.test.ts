@@ -1096,3 +1096,160 @@ test("replayed OSC 52 copies are not repeated while live copies still are", asyn
   expect(copies()).toBe("1");
   expect(inputText(socket)).toBe("");
 });
+
+// Replays soft-keyboard IME event orders observed on iOS Chinese/Japanese
+// keyboards: directly committed text (space, digits, punctuation) arrives as
+// insertText while keyCode is 229, sometimes before its keydown or while an
+// earlier keydown is still unreleased. The browser's default action is
+// modelled: an uncancelled beforeinput edits the textarea, then input fires.
+function imeKey(textarea: HTMLTextAreaElement, type: "keydown" | "keyup") {
+  const event = new KeyboardEvent(type, {
+    key: "Unidentified",
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  Object.defineProperty(event, "keyCode", { value: 229 });
+  textarea.dispatchEvent(event);
+}
+
+function imeInsert(
+  textarea: HTMLTextAreaElement,
+  data: string,
+  inputType = "insertText",
+  isComposing = false,
+) {
+  const init = { inputType, data, isComposing, bubbles: true, composed: true };
+  const before = new InputEvent("beforeinput", { ...init, cancelable: true });
+  if (!textarea.dispatchEvent(before)) return;
+  textarea.value += data;
+  textarea.dispatchEvent(new InputEvent("input", init));
+}
+
+async function settle() {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+test("IME-committed spaces, digits and punctuation reach the terminal exactly once", async () => {
+  const { socket } = await openTerminal();
+  await page.getByRole("button", { name: "Focus terminal input" }).click();
+  const textarea = host().querySelector<HTMLTextAreaElement>(
+    ".xterm-helper-textarea",
+  )!;
+  expect(document.activeElement).toBe(textarea);
+
+  // keydown(229) before the insertion.
+  imeKey(textarea, "keydown");
+  imeInsert(textarea, " ");
+  imeKey(textarea, "keyup");
+  await settle();
+  expect(inputText(socket)).toBe(" ");
+
+  // Insertion before its keydown while a previous key is still held.
+  imeKey(textarea, "keydown");
+  await settle();
+  imeInsert(textarea, "1");
+  imeKey(textarea, "keydown");
+  imeKey(textarea, "keyup");
+  await settle();
+  expect(inputText(socket)).toBe(" 1");
+
+  // Insertion without any keydown while a previous key never released, as
+  // when the keyboard swallows keyups of keys its IME handled.
+  imeKey(textarea, "keydown");
+  await settle();
+  imeInsert(textarea, "，");
+  await settle();
+  imeKey(textarea, "keyup");
+  imeInsert(textarea, " ");
+  await settle();
+  expect(inputText(socket)).toBe(" 1， ");
+
+  // Composition still commits once through xterm's composition handling.
+  imeKey(textarea, "keydown");
+  textarea.dispatchEvent(
+    new CompositionEvent("compositionstart", { data: "" }),
+  );
+  imeInsert(textarea, "ni", "insertCompositionText", true);
+  textarea.value = textarea.value.slice(0, -2);
+  imeInsert(textarea, "你", "insertCompositionText", true);
+  textarea.dispatchEvent(
+    new CompositionEvent("compositionend", { data: "你" }),
+  );
+  imeKey(textarea, "keyup");
+  await settle();
+  expect(inputText(socket)).toBe(" 1， 你");
+
+  // Safari may commit with insertText just after compositionend.
+  imeKey(textarea, "keydown");
+  textarea.dispatchEvent(
+    new CompositionEvent("compositionstart", { data: "" }),
+  );
+  imeInsert(textarea, "hao", "insertCompositionText", true);
+  textarea.value = textarea.value.slice(0, -3);
+  textarea.dispatchEvent(
+    new CompositionEvent("compositionend", { data: "好" }),
+  );
+  imeInsert(textarea, "好");
+  imeKey(textarea, "keyup");
+  await settle();
+  expect(inputText(socket)).toBe(" 1， 你好");
+
+  // Hardware and English soft keyboards still use xterm's keydown and
+  // keypress paths; keypress leaves the insertion uncancelled.
+  await userEvent.keyboard(" 2");
+  await settle();
+  expect(inputText(socket)).toBe(" 1， 你好 2");
+});
+
+test("iOS IME composition keeps the helper caret fixed without dropping commits", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    Navigator.prototype,
+    "userAgent",
+  );
+  Object.defineProperty(Navigator.prototype, "userAgent", {
+    configurable: true,
+    get: () => "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+  });
+  try {
+    const { socket } = await openTerminal();
+    await page.getByRole("button", { name: "Focus terminal input" }).click();
+    const textarea = host().querySelector<HTMLTextAreaElement>(
+      ".xterm-helper-textarea",
+    )!;
+    expect(host().classList.contains("ios-ime")).toBe(true);
+    expect(document.activeElement).toBe(textarea);
+
+    socket.receive(0, "\r\n\r\n");
+    await settle();
+    textarea.dispatchEvent(
+      new CompositionEvent("compositionstart", { data: "" }),
+    );
+    textarea.dispatchEvent(
+      new CompositionEvent("compositionupdate", { data: "nihao" }),
+    );
+    // xterm writes the cursor position inline; the pin must win so WebKit
+    // has no moving caret to pan the visual viewport toward. This first
+    // assertion pins that xterm internal: if an upgrade stops writing inline
+    // positions, revisit the stylesheet override rather than the pin checks.
+    expect(textarea.style.top).not.toBe("0px");
+    const pinned = getComputedStyle(textarea);
+    expect(pinned.left).toBe("0px");
+    expect(pinned.top).toBe("0px");
+    expect(pinned.width).toBe("16px");
+    expect(pinned.height).toBe("16px");
+    expect(pinned.fontSize).toBe("16px");
+    expect({ x: window.scrollX, y: window.scrollY }).toEqual({ x: 0, y: 0 });
+
+    textarea.dispatchEvent(
+      new CompositionEvent("compositionend", { data: "你" }),
+    );
+    imeInsert(textarea, "你");
+    await settle();
+    expect(inputText(socket)).toContain("你");
+    expect(inputText(socket)).not.toContain("nihao");
+  } finally {
+    if (descriptor)
+      Object.defineProperty(Navigator.prototype, "userAgent", descriptor);
+  }
+});
