@@ -78,13 +78,14 @@ jobs:
           exit $LASTEXITCODE
       - name: Vet native Windows backend
         run: go vet ./...
-      - name: Frontend unit and browser tests
-        run: |
-          pnpm --dir web exec playwright install chromium
-          pnpm --dir web test:unit
-          pnpm --dir web test:browser
+      - name: Install Chromium
+        run: pnpm --dir web exec playwright install chromium
       - name: Native Windows browser end-to-end smoke
         run: pnpm --dir web exec playwright test --config playwright.config.ts windows.spec.ts
+      - name: Frontend unit and browser tests
+        run: |
+          pnpm --dir web test:unit
+          pnpm --dir web test:browser
       - name: Build standalone Windows binary
         env:
           CGO_ENABLED: "0"
