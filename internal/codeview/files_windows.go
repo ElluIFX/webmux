@@ -190,3 +190,28 @@ func entryDetails(parent *os.File, name string, entry os.DirEntry) (kind, link s
 	}
 	return "file", "", nil
 }
+
+// os.Stat on Windows can defer reading the file ID until os.SameFile is
+// called. Capture it from an open handle now, before the path can be replaced.
+func identityInfo(path string) (os.FileInfo, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateFile(name, windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(handle), path)
+	defer f.Close()
+	info, err := handleInfo(f)
+	if err != nil {
+		return nil, err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return nil, problem(409, "身份路径已变为重解析点")
+	}
+	return f.Stat()
+}

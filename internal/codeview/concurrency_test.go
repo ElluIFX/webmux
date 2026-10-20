@@ -87,6 +87,20 @@ func TestConcurrencyGateBeforeFilesystemValidation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// Windows pins a running process's current directory. Retain the
+			// exited session metadata, but release its cwd before deleting it.
+			item, err := s.manager.Get(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.manager.Close(id); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-item.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("session close timeout")
+			}
 			if err := os.RemoveAll(root); err != nil {
 				t.Fatal(err)
 			}
