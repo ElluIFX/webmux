@@ -11,6 +11,7 @@ export const longError = `无法访问工作区：${longPath}。请检查目录�
 
 export const session = SessionInfoSchema.parse({
   id: "abcdefgh",
+  generation: "0123456789abcdef",
   title: `正在检查终端任务 · ${longToken}`,
   cwd: longPath,
   preset: "shell",

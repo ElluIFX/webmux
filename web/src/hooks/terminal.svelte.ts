@@ -1,14 +1,25 @@
 import { onMount } from "svelte";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { apiBuffer, stored, store } from "../api";
 import {
+  ControlStateSchema,
   ExitSchema,
   FontSizeSchema,
   SessionInfoSchema,
+  StreamPositionSchema,
+  SubmissionStatusSchema,
+  type ControlState,
   type SessionInfo,
+  type StreamPosition,
+  type SubmissionProgress,
 } from "../schemas";
+import {
+  clientIdentity,
+  encodeSubmission,
+  preparePaste,
+} from "../terminalProtocol";
 import { connect, type Connection, type SocketConnection } from "../ws";
 import { modifiedInput, type Modifiers } from "../input";
 import {
@@ -75,12 +86,38 @@ export function useTerminal(
   let selection = $state("");
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  const identity = clientIdentity();
+  // Output continuity: `offset` counts the stream bytes handed to xterm since
+  // the snapshot of run `generation`. While `synced`, a reconnect asks the
+  // server for only the bytes after it.
+  let generation: string | undefined;
+  let offset = 0;
+  let synced = false;
+  let historyTruncated = $state(false);
+  let control = $state<ControlState>();
+  const controlling = () =>
+    !!control && control.controller?.clientId === identity.id;
+  // Until the server reports control, fit locally without resizing the PTY.
+  const observing = () => !!control && !controlling();
+  // Unconfirmed submissions, re-queried after every reconnect.
+  const submissions = new Map<string, (state: SubmissionProgress) => void>();
 
   let pasteResult = false;
   function safeFit() {
     const parent = getContainer();
     if (isVisible() && parent?.clientWidth > 0 && parent?.clientHeight > 0) {
-      fit?.fit();
+      // Observers render the controller's grid and scroll it, never fit.
+      parent.classList.toggle("observing", observing());
+      if (control && observing()) {
+        if (
+          terminal?.cols !== control.cols ||
+          terminal?.rows !== control.rows
+        ) {
+          terminal?.resize(control.cols, control.rows);
+          // Keep the newest rows, where prompts appear, in view.
+          parent.scrollTop = parent.scrollHeight;
+        }
+      } else fit?.fit();
       if (scrollOnFit && terminal) {
         terminal.scrollToBottom();
         scrollOnFit = false;
@@ -291,21 +328,100 @@ export function useTerminal(
         });
       };
       restoreBuffer = restore;
+      const sendSize = () => {
+        if (controlling() && isVisible() && term.cols > 0 && term.rows > 0)
+          ws.send(
+            1,
+            encoder.encode(
+              JSON.stringify({ cols: term.cols, rows: term.rows }),
+            ),
+          );
+      };
+      let resetPosition: StreamPosition | undefined;
+      let appending = false;
       const ws = connect(
-        "/ws/s/" + id,
+        () => {
+          const query = new URLSearchParams({
+            client: identity.id,
+            label: identity.label,
+          });
+          if (synced && generation) {
+            query.set("generation", generation);
+            query.set("offset", String(offset));
+          }
+          return `/ws/s/${id}?${query}`;
+        },
         (data) => {
           if (typeof data === "string") return;
           const frame = new Uint8Array(data);
           const payload = frame.subarray(1);
-          if (frame[0] === 0 || frame[0] === 1) {
-            if (document.hidden) stale = true;
-            else if (frame[0] === 1) {
-              stale = false;
-              restore(payload);
-            } else if (!output.write(payload)) {
+          if (frame[0] === 0) {
+            // Output missed while hidden leaves a gap: stop writing, keep
+            // the offset, and let the foreground reconnect fill it in.
+            // Bytes xterm cannot keep up with are dropped the same way; the
+            // offset counts only bytes handed to xterm, so either resumes.
+            if (document.hidden || stale) stale = true;
+            else if (output.write(payload)) {
+              offset += payload.length;
+              if (appending) {
+                // Like a full replay, a resumed terminal lands on its newest
+                // output once the missing tail has been parsed.
+                appending = false;
+                term.write("", () => {
+                  if (!disposed) scrollToBottom();
+                });
+              }
+            } else {
               stale = true;
               restoring = true;
             }
+          } else if (frame[0] === 4) {
+            const position = StreamPositionSchema.parse(
+              JSON.parse(decoder.decode(payload)),
+            );
+            historyTruncated = position.truncated;
+            resetPosition = undefined;
+            appending = false;
+            if (position.mode === "reset") resetPosition = position;
+            else if (
+              synced &&
+              position.generation === generation &&
+              position.start === offset
+            ) {
+              // The bytes that follow are exactly the missing tail.
+              output.replay();
+              stale = false;
+              restoring = false;
+              appending = position.end > position.start;
+              if (!appending) scrollToBottom();
+            } else {
+              synced = false;
+              ws.send(2, new Uint8Array());
+            }
+          } else if (frame[0] === 1) {
+            const position = resetPosition;
+            resetPosition = undefined;
+            // A hidden page keeps its terminal and resume point unchanged.
+            if (document.hidden) stale = true;
+            else {
+              stale = false;
+              restore(payload);
+              synced = !!position;
+              generation = position?.generation;
+              offset = position?.end ?? 0;
+            }
+          } else if (frame[0] === 5) {
+            const status = SubmissionStatusSchema.parse(
+              JSON.parse(decoder.decode(payload)),
+            );
+            submissions.get(status.id)?.(status.state);
+            if (status.state !== "received") submissions.delete(status.id);
+          } else if (frame[0] === 6) {
+            control = ControlStateSchema.parse(
+              JSON.parse(decoder.decode(payload)),
+            );
+            safeFit();
+            sendSize();
           } else if (frame[0] === 2) {
             info = SessionInfoSchema.parse(JSON.parse(decoder.decode(payload)));
             document.title = info.title + " · WebMux";
@@ -321,16 +437,20 @@ export function useTerminal(
           connection = state;
           if (state === "connected") {
             safeFit();
-            if (isVisible() && term.cols > 0 && term.rows > 0)
+            // The PTY grid follows only after the server confirms control.
+            if (submissions.size)
               ws.send(
-                1,
+                4,
                 encoder.encode(
-                  JSON.stringify({ cols: term.cols, rows: term.rows }),
+                  JSON.stringify({ ids: [...submissions.keys()] }),
                 ),
               );
           }
-          if (state === "connecting" || state === "reconnecting")
-            restoring = true;
+          if (state === "connecting" || state === "reconnecting") {
+            // A synced terminal stays visible and is extended in place.
+            if (!synced) restoring = true;
+            for (const report of submissions.values()) report("unknown");
+          }
           if (state === "missing") restoring = false;
         },
         (message) => {
@@ -338,7 +458,31 @@ export function useTerminal(
         },
       );
       socket = ws;
-      const input = term.onData(send);
+      // xterm emits keypresses and its own answers to device queries through
+      // the same event, sometimes as identical bytes (Shift+F3 and a cursor
+      // report are both "ESC [ 1 ; 2 R"). Its core fires onUserInput right
+      // before onData only for the former; the server needs that provenance
+      // to write one answer per query and to let only real input take
+      // control. Without the hook, everything is sent as user input.
+      let typed = false;
+      const core = (
+        term as unknown as {
+          _core?: {
+            coreService?: {
+              onUserInput?: (listener: () => void) => IDisposable;
+            };
+          };
+        }
+      )._core;
+      const provenance = core?.coreService?.onUserInput?.(() => {
+        typed = true;
+      });
+      const input = term.onData((data) => {
+        const user = typed || !provenance;
+        typed = false;
+        if (user) send(data);
+        else ws.send(6, encoder.encode(data));
+      });
       const selected = term.onSelectionChange(() => {
         selection = term.getSelection();
       });
@@ -351,10 +495,7 @@ export function useTerminal(
         if (!replaying) clipboard.copySelection(text);
         return true;
       });
-      const resize = term.onResize((size) => {
-        if (isVisible() && size.cols > 0 && size.rows > 0)
-          ws.send(1, encoder.encode(JSON.stringify(size)));
-      });
+      const resize = term.onResize(sendSize);
       let timer: number | undefined;
       const observer = new ResizeObserver(([entry]) => {
         if (disposed) return;
@@ -410,6 +551,7 @@ export function useTerminal(
           .then((payload) => {
             if (!disposed) {
               stale = false;
+              synced = false;
               restore(payload);
             }
           })
@@ -522,6 +664,7 @@ export function useTerminal(
         clearTimeout(compositionTimer);
         parent.classList.remove("ios-ime");
         input.dispose();
+        provenance?.dispose();
         resize.dispose();
         selected.dispose();
         oscClipboard.dispose();
@@ -541,6 +684,8 @@ export function useTerminal(
         });
         terminal = undefined;
         socket = undefined;
+        synced = false;
+        parent.classList.remove("observing");
         fit = undefined;
         restoreBuffer = undefined;
         scrollOnFit = false;
@@ -586,6 +731,68 @@ export function useTerminal(
     get selection() {
       return selection;
     },
+    get historyTruncated() {
+      return historyTruncated;
+    },
+    get control() {
+      return control;
+    },
+    get controlling() {
+      return controlling();
+    },
+    get clientId() {
+      return identity.id;
+    },
+    // Takes input and grid control for this browser tab.
+    claim() {
+      if (control && !controlling()) socket?.send(5, new Uint8Array());
+    },
+    // Sends text and an optional Enter as one acknowledged submission. The
+    // body is prepared like xterm's paste; `report` receives each state.
+    submit(
+      submissionId: string,
+      text: string,
+      enter: boolean,
+      report: (state: SubmissionProgress) => void,
+    ) {
+      const run = generation ?? info?.generation;
+      if (
+        !terminal ||
+        !socket ||
+        !run ||
+        connection !== "connected" ||
+        restoring ||
+        exitCode !== null
+      )
+        return false;
+      modifiers = { ctrl: false, alt: false };
+      const body = preparePaste(text, terminal.modes.bracketedPasteMode);
+      submissions.set(submissionId, report);
+      if (
+        !socket.send(
+          3,
+          encodeSubmission(submissionId, run, body, enter ? "\r" : ""),
+        )
+      ) {
+        submissions.delete(submissionId);
+        return false;
+      }
+      report("sending");
+      terminal.scrollToBottom();
+      return true;
+    },
+    // Follows a submission whose acknowledgement may have been lost.
+    track(submissionId: string, report: (state: SubmissionProgress) => void) {
+      submissions.set(submissionId, report);
+      if (connection === "connected")
+        socket?.send(
+          4,
+          encoder.encode(JSON.stringify({ ids: [submissionId] })),
+        );
+    },
+    untrack(submissionId: string) {
+      submissions.delete(submissionId);
+    },
     copySelection() {
       if (selection) clipboard.copySelection(selection);
     },
@@ -615,7 +822,10 @@ export function useTerminal(
     },
     keyboard() {
       if (document.activeElement === terminal?.textarea) terminal?.blur();
-      else terminal?.focus();
+      else {
+        if (control && !controlling()) socket?.send(5, new Uint8Array());
+        terminal?.focus();
+      }
     },
     clear() {
       terminal?.clear();

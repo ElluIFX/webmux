@@ -95,7 +95,11 @@
         {draft}
         {drafts}
         unavailable={`连接暂不可用，请保留草稿：${longToken}`}
+        saved="已保存在本机"
+        target={session.title}
         send={() => (notice = "发送操作仅作演示")}
+        resend={() => (notice = "重发操作仅作演示")}
+        release={() => (notice = "转为草稿仅作演示")}
         filePaste={() => false}
         controlNotice={() => (notice = "控制键仅作演示")}
       />
