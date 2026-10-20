@@ -105,6 +105,19 @@ function pickerGeometry() {
   return { picker, header, wrapper, viewport, footer };
 }
 
+async function waitForPickerAnimations() {
+  // Loaded directories do not guarantee that the opening zoom/slide has ended.
+  await Promise.all(
+    slot("popover-content")
+      .getAnimations({ subtree: true })
+      .filter(
+        (animation) =>
+          animation.effect?.getComputedTiming().endTime !== Infinity,
+      )
+      .map((animation) => animation.finished.catch(() => {})),
+  );
+}
+
 function expectUsableGeometry() {
   const { picker, header, wrapper, viewport, footer } = pickerGeometry();
   const bounds = picker.getBoundingClientRect();
@@ -153,6 +166,7 @@ test("long directory lists have a visible scrollbar, usable spacing and independ
   await expect
     .poll(() => slot("scroll-area-thumb").getBoundingClientRect().height)
     .toBeGreaterThan(0);
+  await waitForPickerAnimations();
   expectUsableGeometry();
 
   const { picker, header, wrapper, viewport, footer } = pickerGeometry();
@@ -222,6 +236,7 @@ test("390px mobile picker keeps long names, header and choose action inside the 
   await page.viewport(390, 844);
   await openPicker("/many", 390);
   await expect.element(option(basename(lastDirectory))).toBeInTheDocument();
+  await waitForPickerAnimations();
   expectUsableGeometry();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
     window.innerWidth,
