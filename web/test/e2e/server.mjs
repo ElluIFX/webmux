@@ -129,6 +129,10 @@ export async function startE2EServer({ noGit = false } = {}) {
           cwd: workDir,
           stdio: ["ignore", "pipe", "pipe"],
           env: {
+            // Windows PowerShell and native tools depend on the platform's
+            // installed-module/runtime environment. Preserve it on Windows,
+            // then override all test-owned home, config, temp and PATH values.
+            ...(windows ? process.env : {}),
             ...(windows
               ? {
                   SystemRoot: process.env.SystemRoot,
