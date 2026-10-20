@@ -32,6 +32,7 @@ func (s *Preview) Resize(cols, rows uint16) string {
 		// inject input. Only the browser terminal may write back to the PTY.
 		s.screen = vt.NewTerminal(options)
 		s.boundRepeats()
+		s.boundCombining()
 	} else if s.screen.Cols() != int(cols) || s.screen.Rows() != int(rows) {
 		s.screen.Resize(int(cols), int(rows))
 	} else {
