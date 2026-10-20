@@ -72,6 +72,7 @@
       connection: string;
       paste: (text: string) => TextInsertion;
       draftEnabled: boolean;
+      command?: string[];
     }>
   >();
   let loadingCode = false;
@@ -250,6 +251,7 @@
       destination: (operation) => drafts.destination(draft, operation),
       insert: insertText,
     },
+    () => t.info?.cmd,
   );
 
   onMount(() => {
@@ -788,6 +790,7 @@
             {id}
             visible={codeShown}
             connection={t.connection}
+            command={t.info?.cmd}
             paste={insertReference}
             draftEnabled={draft.enabled}
           />{/if}

@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/rainchan/webmux/internal/workspace"
-	"golang.org/x/sys/unix"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -87,7 +85,7 @@ func (b *binding) listing(ctx context.Context, p string, include bool) (Listing,
 		full := filepath.Join(b.Root, rel)
 		internal := false
 		for _, g := range b.gitDirs {
-			if full == g || strings.HasPrefix(full, g+"/") {
+			if insidePath(g, full) {
 				internal = true
 			}
 		}
@@ -98,33 +96,11 @@ func (b *binding) listing(ctx context.Context, p string, include bool) (Listing,
 		if ig && !include {
 			continue
 		}
-		kind := "file"
-		if entry.IsDir() {
-			kind = "directory"
-			fd, e := unix.Openat(int(f.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-			if e != nil {
-				return r, e
-			}
-			var st unix.Stat_t
-			if unix.Fstatat(fd, ".git", &st, unix.AT_SYMLINK_NOFOLLOW) == nil {
-				kind = "boundary"
-			} else if unix.Fstatat(fd, "HEAD", &st, unix.AT_SYMLINK_NOFOLLOW) == nil && unix.Fstatat(fd, "objects", &st, unix.AT_SYMLINK_NOFOLLOW) == nil {
-				kind = "boundary"
-			}
-			unix.Close(fd)
-		} else if entry.Type()&os.ModeSymlink != 0 {
-			kind = "symlink"
-		} else if !entry.Type().IsRegular() {
-			kind = "special"
+		kind, link, err := entryDetails(f, name, entry)
+		if err != nil {
+			return r, err
 		}
-		n := Node{ID: nodeID(rel), Path: displayPath(rel), Name: displayPath(name), Kind: kind, Ignored: ig, Status: statuses[rel], Referenceable: utf8.ValidString(rel)}
-		if kind == "symlink" {
-			data := make([]byte, 4096)
-			count, e := unix.Readlinkat(int(f.Fd()), name, data)
-			if e == nil {
-				n.Link = string(data[:count])
-			}
-		}
+		n := Node{ID: nodeID(rel), Path: displayPath(rel), Name: displayPath(name), Kind: kind, Ignored: ig, Status: statuses[rel], Referenceable: utf8.ValidString(rel), Link: link}
 		r.Children = append(r.Children, n)
 	}
 	sort.Slice(r.Children, func(i, j int) bool {

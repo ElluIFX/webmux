@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,9 @@ func TestCustomPresetNameIsReserved(t *testing.T) {
 }
 
 func TestStateDirectoryDefaultsAndOptionalStorage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("XDG defaults are Unix-specific; Windows defaults have separate coverage")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", "")

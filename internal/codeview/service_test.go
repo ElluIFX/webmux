@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/rainchan/webmux/internal/session"
-	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -22,7 +22,7 @@ func setup(t *testing.T) (*Service, string, string) {
 	root := t.TempDir()
 	root, _ = filepath.EvalSymlinks(root)
 	m := session.NewManager(session.Options{DefaultCwd: root})
-	item, e := m.Create(root, "custom", []string{"/bin/sh"}, nil, "")
+	item, e := m.Create(root, "custom", testShell(), nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -37,7 +37,7 @@ func setup(t *testing.T) (*Service, string, string) {
 }
 func testGitCommand(root string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com", "LC_ALL=C")
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@example.com", "LC_ALL=C", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.autocrlf", "GIT_CONFIG_VALUE_0=false")
 	return cmd
 }
 func gitTest(t *testing.T, root string, args ...string) string {
@@ -48,6 +48,11 @@ func gitTest(t *testing.T, root string, args ...string) string {
 	if e := session.RunCommand(cmd); e != nil {
 		t.Fatalf("git %v: %s %v", args, out.String(), e)
 	}
+	if len(args) > 0 && args[0] == "init" && runtime.GOOS == "windows" {
+		if output, err := testGitCommand(root, "config", "core.longpaths", "true").CombinedOutput(); err != nil {
+			t.Fatalf("enable long paths: %s: %v", output, err)
+		}
+	}
 	return out.String()
 }
 func write(t *testing.T, root, p, text string) {
@@ -57,6 +62,9 @@ func write(t *testing.T, root, p, text string) {
 	}
 }
 func TestPlainFilesBoundariesAndDetection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX filenames and FIFO; Windows boundaries covered separately")
+	}
 	s, id, root := setup(t)
 	write(t, root, "normal.go", "one\ntwo\n")
 	write(t, root, "a \"\n.go", "unicode\n")
@@ -66,7 +74,7 @@ func TestPlainFilesBoundariesAndDetection(t *testing.T) {
 	outside := t.TempDir()
 	write(t, outside, "secret", "external")
 	os.Symlink(outside, filepath.Join(root, "link"))
-	unix.Mkfifo(filepath.Join(root, "fifo"), 0600)
+	makeTestFIFO(t, filepath.Join(root, "fifo"))
 	os.Mkdir(filepath.Join(root, "nested"), 0700)
 	os.Mkdir(filepath.Join(root, "nested/.git"), 0700)
 	c, e := s.Context(context.Background(), id)
@@ -137,6 +145,9 @@ func TestFileLimitsEncodingAndIdentity(t *testing.T) {
 			t.Fatal("encoding")
 		}
 	}
+	if runtime.GOOS == "windows" {
+		return
+	} // Windows shells hold their current directory open.
 	os.Rename(root, root+"-old")
 	defer os.RemoveAll(root + "-old")
 	os.Mkdir(root, 0700)
@@ -164,7 +175,11 @@ func TestGitDiffSnapshotsSourcesAndIgnored(t *testing.T) {
 	gitTest(t, root, "add", "-f", "tracked.go")
 	work := strings.Replace(staged, "line 80\n", "working 80\n", 1)
 	write(t, root, "tracked.go", work)
-	write(t, root, "new file\n.txt", "new\n")
+	name := "new file\n.txt"
+	if runtime.GOOS == "windows" {
+		name = "new file.txt"
+	}
+	write(t, root, name, "new\n")
 	c, e := s.Context(context.Background(), id)
 	if e != nil || !c.Diff {
 		t.Fatal(c, e)
@@ -239,7 +254,7 @@ func TestPaginationSearchAndExpiry(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	other, e := s.manager.Create(root, "custom", []string{"/bin/sh"}, nil, "")
+	other, e := s.manager.Create(root, "custom", testShell(), nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -300,7 +315,7 @@ func TestLinkedSubdirectoryAndNoGitBinding(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked tree")
 	gitTest(t, root, "worktree", "add", "-qb", "linked-test", linked)
 	os.Mkdir(filepath.Join(linked, "src"), 0700)
-	item, e := s.manager.Create(filepath.Join(linked, "src"), "custom", []string{"/bin/sh"}, nil, "")
+	item, e := s.manager.Create(filepath.Join(linked, "src"), "custom", testShell(), nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -314,7 +329,7 @@ func TestLinkedSubdirectoryAndNoGitBinding(t *testing.T) {
 	}
 	sub := filepath.Join(root, "plain")
 	os.Mkdir(sub, 0700)
-	plain, e := s.manager.Create(sub, "custom", []string{"/bin/sh"}, nil, "")
+	plain, e := s.manager.Create(sub, "custom", testShell(), nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -547,7 +562,7 @@ func TestCurrentIndexFileRefreshAndDetection(t *testing.T) {
 func TestGitAdministrationCannotBeBrowseRoot(t *testing.T) {
 	s, _, root := setup(t)
 	gitTest(t, root, "init", "-q")
-	item, e := s.manager.Create(filepath.Join(root, ".git"), "custom", []string{"/bin/sh"}, nil, "")
+	item, e := s.manager.Create(filepath.Join(root, ".git"), "custom", testShell(), nil, "")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -557,6 +572,9 @@ func TestGitAdministrationCannotBeBrowseRoot(t *testing.T) {
 }
 
 func TestInvalidUTF8PathsUseOpaqueIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames use UTF-16")
+	}
 	s, id, root := setup(t)
 	raw := string([]byte{'a', 0xff, '.', 't', 'x', 't'})
 	doc := document(root, raw, "worktree", "", []byte("readable bytes\n"))
@@ -629,4 +647,11 @@ func TestCodeReadsDoNotRunCleanFiltersOrExternalDiff(t *testing.T) {
 	if _, e = os.Stat(marker); !os.IsNotExist(e) {
 		t.Fatalf("read-only code comparison executed configured helper: %v", e)
 	}
+}
+
+func testShell() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd.exe", "/D", "/Q"}
+	}
+	return []string{"/bin/sh"}
 }

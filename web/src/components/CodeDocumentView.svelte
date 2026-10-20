@@ -29,6 +29,7 @@
     status,
     paste,
     draftEnabled,
+    command,
     refresh,
     openSide,
     beginOpen,
@@ -44,6 +45,7 @@
     status: string;
     paste: (text: string) => TextInsertion;
     draftEnabled: boolean;
+    command?: string[];
     refresh: () => void;
     openSide: (file: CodeFile, intent: number) => void;
     beginOpen: () => number;
@@ -119,7 +121,7 @@
   let preview = $derived.by(() => {
     if (!doc || !doc.referenceable || doc.source === "empty") return "";
     try {
-      return codeReference(doc, start, end);
+      return codeReference(doc, start, end, command);
     } catch {
       return "";
     }
@@ -275,7 +277,7 @@
       : row;
     if (!doc || !number) return;
     try {
-      return { number, text: codeReference(doc, number) };
+      return { number, text: codeReference(doc, number, undefined, command) };
     } catch {
       return;
     }

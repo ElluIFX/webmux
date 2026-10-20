@@ -1,3 +1,4 @@
+import { quotePath, shellFlavor } from "../native-path";
 import { onMount } from "svelte";
 import { uploadFile } from "../api";
 import type { Connection } from "../ws";
@@ -29,6 +30,7 @@ export function useUpload(
   terminal: UploadTerminal,
   setError: (message: string) => void,
   input: UploadInput,
+  getCommand: () => string[] | undefined = () => undefined,
 ) {
   let progress = $state<{
     name: string;
@@ -138,7 +140,7 @@ export function useUpload(
             throw new DOMException("操作已取消", "AbortError");
           // Quote arbitrary filenames safely. Uploading never runs a command.
           lastTarget = input.insert(
-            "'" + path.replaceAll("'", "'\\''") + "' ",
+            quotePath(path, shellFlavor(getCommand(), path)) + " ",
             operation,
           );
           if (lastTarget === "failed") throw new Error("输入目标未就绪");

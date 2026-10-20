@@ -10,10 +10,18 @@ import { createServer } from "vite";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const repoRoot = resolve(webRoot, "..");
+const windows = process.platform === "win32";
+const windowsShell = join(
+  process.env.SystemRoot || "C:\\Windows",
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+);
 
 function signalChild(child, signal, group = false) {
   try {
-    if (group) process.kill(-child.pid, signal);
+    if (group && !windows) process.kill(-child.pid, signal);
     else child.kill(signal);
   } catch (error) {
     if (error.code !== "ESRCH") throw error;
@@ -56,7 +64,7 @@ export async function startE2EServer({ noGit = false } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "webmux-e2e-")));
   const workDir = join(root, "work");
   const home = join(root, "home");
-  const binary = join(root, "webmux");
+  const binary = join(root, windows ? "webmux.exe" : "webmux");
   const config = join(root, "config.toml");
   let backend;
   let builder;
@@ -91,14 +99,14 @@ export async function startE2EServer({ noGit = false } = {}) {
       mkdir(home),
       writeFile(
         config,
-        `listen = "127.0.0.1:0"\ndefault_cwd = ${JSON.stringify(workDir)}\nstate_dir = ${JSON.stringify(join(root, "state"))}\nshell = "/bin/bash"\nidle_after_seconds = 30\n\n[[presets]]\nname = "shell"\nlabel = "Shell"\ncmd = ["/bin/bash", "--noprofile", "--norc", "-i"]\n`,
+        `listen = "127.0.0.1:0"\ndefault_cwd = ${JSON.stringify(workDir)}\nstate_dir = ${JSON.stringify(join(root, "state"))}\nshell = ${JSON.stringify(windows ? windowsShell : "/bin/bash")}\nidle_after_seconds = 30\n\n[[presets]]\nname = "shell"\nlabel = "Shell"\ncmd = ${JSON.stringify(windows ? [windowsShell, "-NoLogo", "-NoProfile", "-NoExit"] : ["/bin/bash", "--noprofile", "--norc", "-i"])}\n`,
       ),
     ]);
     // Build into the temporary directory, never bin/ or the embedded frontend.
     builder = spawn("go", ["build", "-o", binary, "./cmd/webmux"], {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
+      detached: !windows,
     });
     builder.stdout.on("data", (chunk) => (buildOutput += chunk));
     builder.stderr.on("data", (chunk) => (buildOutput += chunk));
@@ -121,6 +129,19 @@ export async function startE2EServer({ noGit = false } = {}) {
           cwd: workDir,
           stdio: ["ignore", "pipe", "pipe"],
           env: {
+            ...(windows
+              ? {
+                  SystemRoot: process.env.SystemRoot,
+                  WINDIR: process.env.WINDIR,
+                  PATHEXT: process.env.PATHEXT,
+                  ComSpec: process.env.ComSpec,
+                  USERPROFILE: home,
+                  APPDATA: join(home, "AppData", "Roaming"),
+                  LOCALAPPDATA: join(home, "AppData", "Local"),
+                  TEMP: root,
+                  TMP: root,
+                }
+              : {}),
             PATH: noGit
               ? join(root, "no-git")
               : (process.env.PATH ?? "/usr/bin:/bin"),

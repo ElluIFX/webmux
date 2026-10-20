@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 
 	"github.com/rainchan/webmux/internal/config"
 	"github.com/rainchan/webmux/internal/session"
@@ -78,7 +77,7 @@ func (s *Service) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lock != nil {
-		_ = syscall.Flock(int(s.lock.Fd()), syscall.LOCK_UN)
+		_ = unlockRegistry(s.lock)
 		_ = s.lock.Close()
 		s.lock = nil
 	}
@@ -107,7 +106,7 @@ func (s *Service) load() error {
 		_ = lock.Close()
 		return err
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockRegistry(lock); err != nil {
 		_ = lock.Close()
 		return fmt.Errorf("状态目录已被另一实例使用: %w", err)
 	}
@@ -129,10 +128,10 @@ func (s *Service) load() error {
 	}
 	ids, paths := map[string]bool{}, map[string]bool{}
 	for _, entry := range stored.Repositories {
-		if entry.ID == "" || !filepath.IsAbs(entry.CommonDir) || !filepath.IsAbs(entry.AnchorPath) || ids[entry.ID] || paths[entry.CommonDir] {
+		if entry.ID == "" || !filepath.IsAbs(entry.CommonDir) || !filepath.IsAbs(entry.AnchorPath) || ids[entry.ID] || paths[pathKey(entry.CommonDir)] {
 			return errors.New("仓库清单身份无效或重复")
 		}
-		ids[entry.ID], paths[entry.CommonDir] = true, true
+		ids[entry.ID], paths[pathKey(entry.CommonDir)] = true, true
 	}
 	if err := os.Chmod(path, 0600); err != nil {
 		return err
@@ -174,14 +173,10 @@ func (s *Service) save(entries []*repositoryState) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(f.Name(), filepath.Join(s.stateDir, "repositories.json")); err != nil {
+	if err := replaceRegistry(f.Name(), filepath.Join(s.stateDir, "repositories.json")); err != nil {
 		return err
 	}
-	directory, err := os.Open(s.stateDir)
-	if err == nil {
-		err = directory.Sync()
-		_ = directory.Close()
-	}
+	err = syncRegistryDir(s.stateDir)
 	if err != nil {
 		// Rename already published different bytes. Keep the last confirmed
 		// memory state, but never allow it to overwrite the uncertain disk state.
@@ -239,7 +234,7 @@ func (s *Service) Register(ctx context.Context, path string) (Repository, bool, 
 		return Repository{}, false, err
 	}
 	for _, r := range s.entries {
-		if r.entry.CommonDir == common {
+		if pathKey(r.entry.CommonDir) == pathKey(common) {
 			s.mu.Unlock()
 			snapshot, err := s.snapshot(ctx, r)
 			s.reassociate(ctx)

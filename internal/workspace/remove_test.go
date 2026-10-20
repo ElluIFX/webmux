@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -33,6 +32,7 @@ func assertExists(t *testing.T, path string) {
 	}
 }
 func TestSafeRemovalProtectsEveryContentCategoryAndRetainsBranches(t *testing.T) {
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -74,7 +74,7 @@ func TestSafeRemovalProtectsEveryContentCategoryAndRetainsBranches(t *testing.T)
 		})
 	}
 	clean := linkedTest(t, s, r, "clean")
-	exited, err := s.CreateSession(context.Background(), clean.Path, "custom", []string{"/bin/sh", "-c", "printf RETAINED"}, nil, "", nil)
+	exited, err := s.CreateSession(context.Background(), clean.Path, "custom", testPrintCommand("RETAINED"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +95,7 @@ func TestSafeRemovalProtectsEveryContentCategoryAndRetainsBranches(t *testing.T)
 	}
 }
 func TestStaleConfirmationsRejectBeforeClosingPTY(t *testing.T) {
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -142,6 +143,7 @@ func TestStaleConfirmationsRejectBeforeClosingPTY(t *testing.T) {
 	}
 }
 func TestForceRemovalRequiresExplicitAuthorizationAndWaitsForPTYCleanup(t *testing.T) {
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, m := testService(t, t.TempDir(), root)
@@ -199,7 +201,7 @@ func TestForceRemovalRequiresExplicitAuthorizationAndWaitsForPTYCleanup(t *testi
 	if item.Info().Status != session.StatusExited || !strings.Contains(string(item.Buffer()), "FINAL_DRAIN") {
 		t.Fatalf("PTY final output not drained: %q %+v", item.Buffer(), item.Info())
 	}
-	if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+	if err := testProcessGone(pid); err != nil {
 		t.Fatalf("child process survived deletion: pid=%d err=%v", pid, err)
 	}
 	if _, err := m.Get(item.Info().ID); err != nil {
@@ -245,7 +247,7 @@ func TestUnsupportedRemovalAndReservationRelease(t *testing.T) {
 			if err := s.RemoveWorktree(context.Background(), r.ID, tree.ID, forceRequest(p)); Status(err) != 409 {
 				t.Fatalf("unsupported removal: %v", err)
 			}
-			item, err := s.CreateSession(context.Background(), tree.Path, "custom", []string{"/bin/sh", "-c", "printf UNRESERVED"}, nil, "", nil)
+			item, err := s.CreateSession(context.Background(), tree.Path, "custom", testPrintCommand("UNRESERVED"), nil, "", nil)
 			if err != nil {
 				t.Fatal("reservation leaked", err)
 			}
@@ -275,7 +277,7 @@ func TestDeletionReservationsBlockDirectAndSymlinkChildLaunches(t *testing.T) {
 		wg.Add(1)
 		go func(path string) {
 			defer wg.Done()
-			_, err := s.CreateSession(context.Background(), path, "custom", []string{"/bin/sh", "-c", "printf BYPASS"}, nil, "", nil)
+			_, err := s.CreateSession(context.Background(), path, "custom", testPrintCommand("BYPASS"), nil, "", nil)
 			if Status(err) != 409 {
 				t.Errorf("deletion reservation bypassed by %q: %v", path, err)
 			}
@@ -283,13 +285,14 @@ func TestDeletionReservationsBlockDirectAndSymlinkChildLaunches(t *testing.T) {
 	}
 	wg.Wait()
 	s.unreserve(tree.Path)
-	item, err := s.CreateSession(context.Background(), alias, "custom", []string{"/bin/sh", "-c", "printf RELEASED"}, nil, "", nil)
+	item, err := s.CreateSession(context.Background(), alias, "custom", testPrintCommand("RELEASED"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitDone(t, item)
 }
 func TestDeleteWaitsForInflightLaunchThenRejectsStaleSessionSet(t *testing.T) {
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, m := testService(t, t.TempDir(), root)
@@ -334,6 +337,7 @@ func TestDeleteWaitsForInflightLaunchThenRejectsStaleSessionSet(t *testing.T) {
 	assertExists(t, tree.Path)
 }
 func TestRemovalCancellationAndGitFailurePreserveTruth(t *testing.T) {
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -377,7 +381,7 @@ func TestRemovalCancellationAndGitFailurePreserveTruth(t *testing.T) {
 	if strings.Count(string(args), "--force\n") != 1 {
 		t.Fatalf("not single force: %s", args)
 	}
-	retry, err := s.CreateSession(context.Background(), tree.Path, "custom", []string{"/bin/sh", "-c", "printf RETRY"}, nil, "", nil)
+	retry, err := s.CreateSession(context.Background(), tree.Path, "custom", testPrintCommand("RETRY"), nil, "", nil)
 	if err != nil {
 		t.Fatal("failure leaked reservation", err)
 	}

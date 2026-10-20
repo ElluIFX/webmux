@@ -1,10 +1,13 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -174,13 +177,16 @@ func TestUserInputClearsAttention(t *testing.T) {
 	}
 }
 
+// Attention state needs a successful write, not a platform pipe/deadline
+// implementation. Real cancellation and recovery are covered by lifecycle tests.
+type attentionTestTerminal struct{ bytes.Buffer }
+
+func (*attentionTestTerminal) Read([]byte) (int, error)         { return 0, io.EOF }
+func (*attentionTestTerminal) Close() error                     { return nil }
+func (*attentionTestTerminal) SetWriteDeadline(time.Time) error { return nil }
+
 func TestCancelledInputKeepsAttention(t *testing.T) {
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = reader.Close() }()
-	defer func() { _ = writer.Close() }()
+	writer := &attentionTestTerminal{}
 	s := attentionSession()
 	s.terminal, s.inputGate, s.done = writer, make(chan struct{}, 1), make(chan struct{})
 	s.inputGate <- struct{}{}
@@ -257,7 +263,12 @@ func TestRealSessionAttentionSurvivesSpinner(t *testing.T) {
 	script := `env > env.txt; printf '\033]777;notify;warp://cli-agent;{"v":1,"event":"question_asked"}\007'; ` +
 		`stty raw -echo; while :; do printf '\r|'; sleep 0.05; printf '\r/'; sleep 0.05; done`
 	dir := t.TempDir()
-	m := NewManager(Options{DefaultCwd: dir, Presets: []Preset{{Name: "agent", Cmd: []string{"/bin/bash", "-c", script}}}})
+	argv := []string{"/bin/bash", "-c", script}
+	if runtime.GOOS == "windows" {
+		script = `[IO.File]::WriteAllText((Join-Path (Get-Location) 'env.txt'), ((Get-ChildItem Env: | ForEach-Object { $_.Name + '=' + $_.Value }) -join "` + "`n" + `") + "` + "`n" + `"); [Console]::Write(([char]27) + ']777;notify;warp://cli-agent;{"v":1,"event":"question_asked"}' + ([char]7)); while ($true) { [Console]::Write("` + "`r" + `|"); Start-Sleep -Milliseconds 50; [Console]::Write("` + "`r" + `/"); Start-Sleep -Milliseconds 50 }`
+		argv = []string{"powershell.exe", "-NoLogo", "-NoProfile", "-Command", script}
+	}
+	m := NewManager(Options{DefaultCwd: dir, Presets: []Preset{{Name: "agent", Cmd: argv}}})
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 		defer cancel()

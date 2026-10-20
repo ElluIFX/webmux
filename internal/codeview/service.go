@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"github.com/rainchan/webmux/internal/session"
 	"github.com/rainchan/webmux/internal/workspace"
-	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,7 +100,7 @@ func nodeID(p string) string { return base64.RawURLEncoding.EncodeToString([]byt
 func nodePath(id string) (string, error) {
 	b, err := base64.RawURLEncoding.DecodeString(id)
 	p := string(b)
-	if err != nil || strings.ContainsRune(p, 0) || filepath.IsAbs(p) {
+	if err != nil || strings.ContainsRune(p, 0) || filepath.IsAbs(p) || !validPlatformPath(p) {
 		return "", problem(400, "无效文件标识")
 	}
 	if p != "" {
@@ -185,7 +184,7 @@ func (s *Service) bind(ctx context.Context, id string) (*binding, error) {
 	}
 	if linked := item.Info().Workspace; linked != nil && b.Diff {
 		expected, e := filepath.EvalSymlinks(linked.WorktreePath)
-		if e != nil || expected != root {
+		if e != nil || !samePath(expected, root) {
 			return nil, problem(409, "工作区关联与浏览根不一致")
 		}
 	}
@@ -214,7 +213,7 @@ func (s *Service) validate(ctx context.Context, b *binding) error {
 			return e
 		}
 		actual, e := filepath.EvalSymlinks(strings.TrimSuffix(string(top), "\n"))
-		if e != nil || actual != b.Root {
+		if e != nil || !samePath(actual, b.Root) {
 			return problem(409, "工作树根来源已改变")
 		}
 		common, e := git(ctx, b.Root, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -222,7 +221,7 @@ func (s *Service) validate(ctx context.Context, b *binding) error {
 			return e
 		}
 		commonPath, e := filepath.EvalSymlinks(strings.TrimSuffix(string(common), "\n"))
-		if e != nil || commonPath != b.gitDirs[1] {
+		if e != nil || !samePath(commonPath, b.gitDirs[1]) {
 			return problem(409, "仓库 common directory 已改变")
 		}
 		commonInfo, e := os.Stat(commonPath)
@@ -234,7 +233,7 @@ func (s *Service) validate(ctx context.Context, b *binding) error {
 			return e
 		}
 		p, e := filepath.EvalSymlinks(strings.TrimSuffix(string(out), "\n"))
-		if e != nil || p != b.gitDirs[0] {
+		if e != nil || !samePath(p, b.gitDirs[0]) {
 			return problem(409, "Git 来源身份已改变")
 		}
 		stat, e = os.Stat(p)
@@ -264,79 +263,11 @@ func (s *Service) root(ctx context.Context, id, cid string) (*binding, error) {
 	return b, e
 }
 
-// Open each segment relative to an already opened directory. O_NOFOLLOW and
-// O_NONBLOCK prevent symlink races and blocking special-file opens on Unix.
-func boundary(fd int) bool {
-	var stat unix.Stat_t
-	return unix.Fstatat(fd, ".git", &stat, unix.AT_SYMLINK_NOFOLLOW) == nil || (unix.Fstatat(fd, "HEAD", &stat, unix.AT_SYMLINK_NOFOLLOW) == nil && unix.Fstatat(fd, "objects", &stat, unix.AT_SYMLINK_NOFOLLOW) == nil)
-}
 func displayPath(p string) string {
 	if utf8.ValidString(p) {
 		return p
 	}
 	return strconv.QuoteToASCII(p)
-}
-func (b *binding) open(p string) (*os.File, error) {
-	if _, err := nodePath(nodeID(p)); err != nil {
-		return nil, err
-	}
-	full := filepath.Join(b.Root, p)
-	for _, g := range b.gitDirs {
-		if full == g || strings.HasPrefix(full, g+"/") {
-			return nil, problem(400, "Git 管理路径不可读取")
-		}
-	}
-	fd, err := unix.Open(b.Root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	f := os.NewFile(uintptr(fd), b.Root)
-	stat, err := f.Stat()
-	if err != nil || !os.SameFile(stat, b.identity) {
-		f.Close()
-		return nil, problem(409, "浏览根已替换")
-	}
-	if p == "" {
-		return f, nil
-	}
-	parts := strings.Split(p, "/")
-	for i, part := range parts {
-		if i > 0 {
-			if boundary(int(f.Fd())) {
-				f.Close()
-				return nil, problem(400, "嵌套仓库边界不可遍历")
-			}
-		}
-		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
-		if i < len(parts)-1 {
-			flags |= unix.O_DIRECTORY
-		}
-		next, e := unix.Openat(int(f.Fd()), part, flags, 0)
-		f.Close()
-		if e != nil {
-			if os.IsNotExist(e) {
-				return nil, os.ErrNotExist
-			}
-			return nil, problem(400, "路径不可安全读取: %v", e)
-		}
-		f = os.NewFile(uintptr(next), full)
-	}
-	stat, err = f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	if stat.IsDir() && p != "" {
-		if boundary(int(f.Fd())) {
-			f.Close()
-			return nil, problem(400, "嵌套仓库边界不可遍历")
-		}
-	}
-	if !stat.IsDir() && !stat.Mode().IsRegular() {
-		f.Close()
-		return nil, problem(400, "不支持读取特殊文件或链接")
-	}
-	return f, nil
 }
 func lines(text string) []string {
 	if text == "" {
@@ -501,3 +432,13 @@ func documentSize(d Document) int {
 }
 
 func version(v any) string { b, _ := json.Marshal(v); return digest(b) }
+
+// filepath.Rel applies the host platform's volume and case rules.
+func samePath(a, b string) bool {
+	rel, err := filepath.Rel(a, b)
+	return err == nil && rel == "."
+}
+func insidePath(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
+}

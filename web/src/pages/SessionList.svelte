@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pathBasename } from "../native-path";
   import { onMount } from "svelte";
   import { IconSun, IconMoon, IconChevronDown } from "@tabler/icons-svelte";
   import { toggleTheme } from "../theme";
@@ -408,7 +409,7 @@
               </p>
             </div>
             {#each directPaths as path (path)}<WorkspaceGroup
-                title={path.split("/").pop() || "/"}
+                title={pathBasename(path)}
                 {path}
                 sessions={direct.filter((s) => s.cwd === path)}
                 {now}

@@ -1,5 +1,11 @@
 <script lang="ts">
   import { tick } from "svelte";
+  import {
+    displayPath,
+    pathBasename,
+    pathRoot,
+    parentPath,
+  } from "../native-path";
   import { IconFolder, IconArrowUp, IconHome } from "@tabler/icons-svelte";
   import { api } from "../api";
   import { DirectoriesSchema } from "../schemas";
@@ -18,38 +24,41 @@
   let error = $state("");
   let showHidden = $state(false);
   const current = $derived(
-    query === "~" ? "~/" : query.slice(0, query.lastIndexOf("/") + 1) || "./",
+    query === "~"
+      ? "~/"
+      : displayPath(query).slice(0, displayPath(query).lastIndexOf("/") + 1) ||
+          "./",
   );
   const visible = $derived(
     directories.filter(
       (dir) =>
         showHidden ||
-        query.split("/").pop()?.startsWith(".") ||
-        !dir.split("/").pop()?.startsWith("."),
+        pathBasename(query)?.startsWith(".") ||
+        !pathBasename(dir)?.startsWith("."),
     ),
   );
 
   function startBrowse(nextOpen: boolean) {
     if (nextOpen) {
-      query = (value || "~").replace(/\/+$/, "") + "/";
+      query = displayPath(value || "~").replace(/\/+$/, "") + "/";
       selected = "";
     }
   }
 
   async function enter(dir: string) {
-    query = dir.replace(/\/+$/, "") + "/";
+    query = displayPath(dir).replace(/\/+$/, "") + "/";
     selected = "";
     await tick();
     input?.focus();
   }
 
   function parent() {
-    const path = current.replace(/\/+$/, "");
-    void enter(path.slice(0, path.lastIndexOf("/")) || "/");
+    void enter(parentPath(current));
   }
 
   function choose() {
-    value = current === "/" ? "/" : current.replace(/\/+$/, "");
+    value =
+      current === pathRoot(current) ? current : current.replace(/\/+$/, "");
     open = false;
   }
 
@@ -105,7 +114,7 @@
           size="icon"
           aria-label="上一级目录"
           title="上一级目录（Alt+↑）"
-          disabled={current === "/"}
+          disabled={current === pathRoot(current)}
           onclick={parent}><IconArrowUp class="size-4" /></Button
         >
         <Button
@@ -163,7 +172,7 @@
             <Command.Item value={dir} onSelect={() => enter(dir)}>
               <IconFolder class="size-4 text-muted-foreground" />
               <span class="min-w-0 flex-1 truncate" title={dir}
-                >{dir.split("/").pop() || "/"}</span
+                >{pathBasename(dir) || "/"}</span
               >
               <span class="text-muted-foreground" aria-hidden="true">›</span>
             </Command.Item>

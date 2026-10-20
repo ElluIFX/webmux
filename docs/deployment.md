@@ -2,7 +2,7 @@
 
 ## 运行要求
 
-- Linux 或 macOS（amd64 / arm64）。
+- Linux 或 macOS（amd64 / arm64），或 Windows 10 1809 / Server 2019 及更新版本（详见 [Windows 指南](windows.md)）。
 - 一个可执行的 shell，以及打算使用的 CLI agent（Claude Code、Codex CLI 等）。
 - 可选：Git，用于仓库与 worktree 管理（需支持 `git worktree list --porcelain -z`）。
 

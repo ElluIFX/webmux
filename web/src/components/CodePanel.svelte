@@ -30,12 +30,14 @@
     connection,
     paste,
     draftEnabled,
+    command,
   }: {
     id: string;
     visible: boolean;
     connection: string;
     paste: (text: string) => TextInsertion;
     draftEnabled: boolean;
+    command?: string[];
   } = $props();
   type Tab = {
     key: string;
@@ -567,6 +569,7 @@
           role="tabpanel"
         >
           <CodeDocumentView
+            {command}
             {id}
             active={visible && active === tab.key}
             file={tab.file}

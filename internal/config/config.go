@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"regexp"
 	"time"
 
@@ -29,15 +28,10 @@ type Config struct {
 }
 
 func DefaultPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "webmux", "config.toml")
+	return defaultConfigPath()
 }
 func DefaultStateDir() string {
-	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
-		return filepath.Join(base, "webmux")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "webmux")
+	return defaultStateDir()
 }
 func Load(path string, required bool) (Config, error) {
 	c := Config{
@@ -85,10 +79,7 @@ func (c *Config) Validate() error {
 		c.StateDir = expanded
 	}
 	if c.Shell == "" {
-		c.Shell = os.Getenv("SHELL")
-	}
-	if c.Shell == "" {
-		c.Shell = "/bin/bash"
+		c.Shell = defaultShell()
 	}
 	seen := map[string]bool{}
 	for i := range c.Presets {
@@ -101,7 +92,7 @@ func (c *Config) Validate() error {
 		}
 		seen[p.Name] = true
 		if p.Name == "shell" && len(p.Cmd) == 0 {
-			p.Cmd = []string{c.Shell, "-l", "-i"}
+			p.Cmd = shellCommand(c.Shell)
 		}
 		if len(p.Cmd) == 0 || p.Cmd[0] == "" {
 			return fmt.Errorf("preset %s has no command", p.Name)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -19,6 +20,9 @@ import (
 )
 
 func TestWorkspaceDegradedServerProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signal-driven subprocess shutdown; native Windows server exercised by Playwright smoke")
+	}
 	if configPath := os.Getenv("WEBMUX_TEST_DEGRADED_CONFIG"); configPath != "" {
 		os.Args = []string{"webmux", "--config", configPath}
 		if err := run(); err != nil {

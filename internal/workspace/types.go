@@ -117,7 +117,7 @@ func randomID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 func worktreeID(repository, path string) string {
-	sum := sha256.Sum256([]byte(repository + "\x00" + path))
+	sum := sha256.Sum256([]byte(repository + "\x00" + pathKey(path)))
 	return hex.EncodeToString(sum[:16])
 }
 func strptr(s string) *string { return &s }

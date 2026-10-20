@@ -90,7 +90,7 @@ func (s *Service) association(ctx context.Context, cwd string) *session.Workspac
 		return nil
 	}
 	for _, r := range s.entries {
-		if r.entry.CommonDir == common {
+		if pathKey(r.entry.CommonDir) == pathKey(common) {
 			return &session.Workspace{RepositoryID: r.entry.ID, WorktreeID: worktreeID(r.entry.ID, path), WorktreePath: path}
 		}
 	}

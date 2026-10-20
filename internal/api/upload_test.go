@@ -13,6 +13,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -31,12 +32,14 @@ func uploadAPI(t *testing.T) (http.Handler, *session.Manager, *session.Session, 
 		defer cancel()
 		m.Shutdown(ctx)
 	})
-	item, err := m.Create(cwd, "custom", []string{"/bin/sh"}, nil, "upload")
+	item, err := m.Create(cwd, "custom", apiProcess("idle"), nil, "upload")
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler := New(config.Config{Token: "secret"}, m, testWorkspace(t, m, cwd))
 	t.Setenv("TMPDIR", root)
+	t.Setenv("TMP", root)
+	t.Setenv("TEMP", root)
 	return handler, m, item, root
 }
 
@@ -117,7 +120,7 @@ func TestUploadPersistsBinaryInPrivateUniqueTemporaryDirectories(t *testing.T) {
 		}
 		for target, mode := range map[string]os.FileMode{path: 0600, filepath.Dir(path): 0700} {
 			info, err := os.Stat(target)
-			if err != nil || info.Mode().Perm() != mode {
+			if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != mode) {
 				t.Fatalf("permissions for %s: %v (%v), want %o", target, info, err, mode)
 			}
 		}

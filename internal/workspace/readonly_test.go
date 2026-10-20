@@ -10,6 +10,7 @@ import (
 )
 
 func TestReadGitBoundsAndCancellation(t *testing.T) {
+	requireUnixFixture(t)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "git")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nwhile :; do printf 'large-output-large-output'; done\n"), 0700); err != nil {

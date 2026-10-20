@@ -23,7 +23,7 @@ type identity struct {
 }
 
 func (id *identity) hold(path string) (os.FileInfo, error) {
-	file, err := os.Open(path)
+	file, err := openIdentity(path)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (s *Service) identify(ctx context.Context, r *repositoryState, tree Worktre
 		return id, err
 	}
 	path, err := canonical(tree.Path)
-	if err != nil || path != tree.Path {
+	if err != nil || pathKey(path) != pathKey(tree.Path) {
 		return id, fmt.Errorf("工作树规范路径身份已改变: %v", err)
 	}
 	data, err := s.git(ctx, tree.Path, "rev-parse", "--absolute-git-dir")
@@ -74,7 +74,7 @@ func (s *Service) identify(ctx context.Context, r *repositoryState, tree Worktre
 	if err != nil {
 		return id, err
 	}
-	if !within(r.entry.CommonDir, id.adminPath) || id.adminPath == r.entry.CommonDir {
+	if !within(r.entry.CommonDir, id.adminPath) || pathKey(id.adminPath) == pathKey(r.entry.CommonDir) {
 		return id, fmt.Errorf("linked worktree 管理目录身份无效")
 	}
 	id.admin, err = id.hold(id.adminPath)

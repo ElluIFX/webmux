@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -78,7 +79,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir, err := os.MkdirTemp("", "webmux-upload-")
+	dir, err := privateUploadDir()
 	if err != nil {
 		failure(w, http.StatusInternalServerError, fmt.Errorf("create upload temporary directory: %w", err))
 		return
@@ -164,6 +165,19 @@ func uploadFilename(name string) (string, error) {
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
 	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
 		return "", errors.New("upload filename must name a file")
+	}
+	if runtime.GOOS == "windows" {
+		// Windows aliases device names even with extensions; ADS and trailing
+		// dots/spaces can address a different file than the displayed name.
+		if strings.ContainsAny(name, `<>:"|?*`) || strings.TrimRight(name, " .") != name {
+			return "", errors.New("upload filename is not a regular Windows filename")
+		}
+		base := strings.ToUpper(strings.TrimRight(strings.SplitN(name, ".", 2)[0], " "))
+		if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || base == "CONIN$" || base == "CONOUT$" ||
+			(len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '0' && base[3] <= '9') ||
+			strings.ContainsAny(base, "¹²³") && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
+			return "", errors.New("upload filename is a reserved Windows device name")
+		}
 	}
 	return name, nil
 }
