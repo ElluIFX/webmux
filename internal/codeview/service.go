@@ -27,12 +27,13 @@ type binding struct {
 	commonIdentity os.FileInfo
 }
 type snapshot struct {
-	session           string
-	context           string
-	file              *File
-	diff              *Diff
-	size              int
-	created, timeUsed time.Time
+	session  string
+	context  string
+	file     *File
+	diff     *Diff
+	size     int
+	created  time.Time
+	useOrder uint64
 }
 type Service struct {
 	manager   *session.Manager
@@ -40,6 +41,7 @@ type Service struct {
 	roots     map[string]*binding
 	snapshots map[string]*snapshot
 	bytes     int
+	useOrder  uint64
 	slots     chan struct{}
 	done      chan struct{}
 	once      sync.Once
@@ -173,11 +175,11 @@ func (s *Service) bind(ctx context.Context, id string) (*binding, error) {
 			}
 			b.gitDirs = append(b.gitDirs, p)
 		}
-		b.commonIdentity, err = os.Stat(b.gitDirs[1])
+		b.commonIdentity, err = identityInfo(b.gitDirs[1])
 		if err != nil {
 			return nil, err
 		}
-		b.gitIdentity, err = os.Stat(b.gitDirs[0])
+		b.gitIdentity, err = identityInfo(b.gitDirs[0])
 		if err != nil {
 			return nil, err
 		}
@@ -189,7 +191,7 @@ func (s *Service) bind(ctx context.Context, id string) (*binding, error) {
 		}
 	}
 	b.Root = root
-	b.identity, err = os.Stat(root)
+	b.identity, err = identityInfo(root)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +205,7 @@ func (s *Service) bind(ctx context.Context, id string) (*binding, error) {
 	return b, s.validate(ctx, b)
 }
 func (s *Service) validate(ctx context.Context, b *binding) error {
-	stat, err := os.Lstat(b.Root)
+	stat, err := identityInfo(b.Root)
 	if err != nil || !stat.IsDir() || !os.SameFile(b.identity, stat) {
 		return problem(409, "浏览根身份已失效")
 	}
@@ -224,7 +226,7 @@ func (s *Service) validate(ctx context.Context, b *binding) error {
 		if e != nil || !samePath(commonPath, b.gitDirs[1]) {
 			return problem(409, "仓库 common directory 已改变")
 		}
-		commonInfo, e := os.Stat(commonPath)
+		commonInfo, e := identityInfo(commonPath)
 		if e != nil || !os.SameFile(commonInfo, b.commonIdentity) {
 			return problem(409, "仓库 common directory 已替换")
 		}
@@ -236,7 +238,7 @@ func (s *Service) validate(ctx context.Context, b *binding) error {
 		if e != nil || !samePath(p, b.gitDirs[0]) {
 			return problem(409, "Git 来源身份已改变")
 		}
-		stat, e = os.Stat(p)
+		stat, e = identityInfo(p)
 		if e != nil || !os.SameFile(stat, b.gitIdentity) {
 			return problem(409, "Git 管理目录已替换")
 		}
@@ -348,7 +350,7 @@ func (s *Service) put(v *snapshot) string {
 	for s.bytes+v.size > CacheBytes {
 		var oldest string
 		for id, old := range s.snapshots {
-			if oldest == "" || old.timeUsed.Before(s.snapshots[oldest].timeUsed) {
+			if oldest == "" || old.useOrder < s.snapshots[oldest].useOrder {
 				oldest = id
 			}
 		}
@@ -360,7 +362,8 @@ func (s *Service) put(v *snapshot) string {
 	}
 	id := random()
 	v.created = now
-	v.timeUsed = now
+	s.useOrder++
+	v.useOrder = s.useOrder
 	s.snapshots[id] = v
 	s.bytes += v.size
 	return id
@@ -375,7 +378,8 @@ func (s *Service) get(id, sid string) (*snapshot, error) {
 	if v.session != id {
 		return nil, problem(400, "快照不属于此会话")
 	}
-	v.timeUsed = time.Now()
+	s.useOrder++
+	v.useOrder = s.useOrder
 	return v, nil
 }
 func (s *Service) File(ctx context.Context, id, cid, nid string) (File, error) {

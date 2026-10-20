@@ -28,7 +28,7 @@ func TestWindowsNodePathAliases(t *testing.T) {
 func windowsBinding(t *testing.T) *binding {
 	t.Helper()
 	root := t.TempDir()
-	info, err := os.Stat(root)
+	info, err := identityInfo(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,5 +144,20 @@ func TestWindowsRelativeOpenPinsDirectory(t *testing.T) {
 	n, err := child.Read(data)
 	if err != nil || string(data[:n]) != "original" {
 		t.Fatalf("opened replacement: %q %v", data[:n], err)
+	}
+}
+
+func TestWindowsGitDirectoryReplacementRejected(t *testing.T) {
+	s, id, root := setup(t)
+	gitTest(t, root, "init", "-q")
+	if _, err := s.Context(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, ".git"), filepath.Join(root, "old-git")); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, root, "init", "-q")
+	if _, err := s.Context(context.Background(), id); Status(err) != 409 {
+		t.Fatalf("replacement Git identity accepted: %v", err)
 	}
 }

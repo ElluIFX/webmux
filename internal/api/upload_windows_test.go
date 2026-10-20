@@ -9,7 +9,7 @@ import (
 )
 
 func TestUploadRejectsWindowsAliasesAndStreams(t *testing.T) {
-	for _, name := range []string{"CON", "con.txt", "CON .txt", "nul.tar.gz", "AUX", "PRN", "COM1.log", "LPT9", "COM¹", "a:stream", "file.", "file ", `a"b`, "a?b", "a*b", "CONIN$", "CONOUT$"} {
+	for _, name := range []string{"CON", "con.txt", "CON .txt", "nul.tar.gz", "AUX", "PRN", "COM1.log", "LPT9", "COM¹", "a:stream", "file:stream:$DATA", `C:\fakepath\a:stream`, "folder/a:stream", "C:relative.txt", "file.", "file ", `a"b`, "a?b", "a*b", "CONIN$", "CONOUT$"} {
 		if got, err := uploadFilename(name); err == nil {
 			t.Errorf("unsafe name %q accepted as %q", name, got)
 		}
@@ -19,6 +19,12 @@ func TestUploadRejectsWindowsAliasesAndStreams(t *testing.T) {
 			t.Errorf("safe name %q: %v", name, err)
 		}
 	}
+	for _, name := range []string{`C:\fakepath\report.txt`, `C:\folder\report.txt`, "C:/fakepath/report.txt"} {
+		if got, err := uploadFilename(name); err != nil || got != "report.txt" {
+			t.Errorf("safe client path %q: name=%q, err=%v", name, got, err)
+		}
+	}
+
 }
 
 func TestUploadDirectoryAndFilesHavePrivateWindowsACL(t *testing.T) {

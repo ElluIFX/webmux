@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -162,8 +163,10 @@ func uploadFilename(name string) (string, error) {
 	}
 	// Treat both slash styles as separators, including filenames supplied by
 	// Windows clients. Inspect the original name before discarding directories.
-	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
-	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
+	// Use slash-only path semantics after normalization. filepath.Base on
+	// Windows would discard a leading "a:" volume before the ADS check below.
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if name == "" || name == "." || name == ".." || name == "/" || name == string(filepath.Separator) {
 		return "", errors.New("upload filename must name a file")
 	}
 	if runtime.GOOS == "windows" {

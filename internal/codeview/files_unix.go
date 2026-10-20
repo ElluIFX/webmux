@@ -102,3 +102,5 @@ func entryDetails(parent *os.File, name string, entry os.DirEntry) (kind, link s
 	}
 	return kind, link, nil
 }
+
+func identityInfo(path string) (os.FileInfo, error) { return os.Lstat(path) }

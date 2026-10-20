@@ -667,3 +667,21 @@ func testShell() []string {
 	}
 	return []string{"/bin/sh"}
 }
+
+func TestCacheEvictionUsesAccessOrder(t *testing.T) {
+	s := &Service{snapshots: map[string]*snapshot{}}
+	first := s.put(&snapshot{session: "session", size: CacheBytes / 2})
+	second := s.put(&snapshot{session: "session", size: CacheBytes / 2})
+	if _, err := s.get("session", first); err != nil {
+		t.Fatal(err)
+	}
+	third := s.put(&snapshot{session: "session", size: CacheBytes / 2})
+	if _, err := s.get("session", second); Status(err) != 410 {
+		t.Fatalf("least recently used entry retained: %v", err)
+	}
+	for _, id := range []string{first, third} {
+		if _, err := s.get("session", id); err != nil {
+			t.Fatalf("recent entry evicted: %v", err)
+		}
+	}
+}
