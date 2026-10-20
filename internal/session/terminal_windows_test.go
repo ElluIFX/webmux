@@ -312,3 +312,39 @@ func TestWindowsExpiredWriteDeadlineDoesNotDeliverBytes(t *testing.T) {
 		t.Fatalf("expired write delivered %q: %v", data, err)
 	}
 }
+
+// Run a second test process with redirected stdio, as happens under go test
+// and service/logging hosts. The session's output must stay in its ConPTY,
+// not appear in the hosting process's redirected stdout/stderr.
+func TestWindowsConPTYWithRedirectedParent(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestWindowsRedirectedParentHelper$")
+	cmd.Env = append(os.Environ(), "WEBMUX_TEST_REDIRECTED_PARENT=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("redirected parent failed: %v\n%s", err, output)
+	}
+	if bytes.Contains(output, []byte("CHILD_CAPTURE_ONLY")) {
+		t.Fatalf("session output leaked to server stdio: %q", output)
+	}
+	if !bytes.Contains(output, []byte("PARENT_CAPTURE_OK")) {
+		t.Fatalf("helper did not verify capture: %q", output)
+	}
+}
+
+func TestWindowsRedirectedParentHelper(t *testing.T) {
+	if os.Getenv("WEBMUX_TEST_REDIRECTED_PARENT") != "1" {
+		return
+	}
+	s := newIdleSession(t, "cmd.exe", "/d", "/c", "echo CHILD_CAPTURE_ONLY")
+	waitWindowsExit(t, s, 0)
+	if !bytes.Contains(s.Buffer(), []byte("CHILD_CAPTURE_ONLY")) {
+		t.Fatalf("ConPTY lost child output: %q", s.Buffer())
+	}
+	fmt.Println("PARENT_CAPTURE_OK")
+}
