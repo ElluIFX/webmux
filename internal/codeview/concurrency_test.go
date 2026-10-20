@@ -7,11 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func TestConcurrencyGateBeforeGitValidation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX wrapper; slot cancellation remains covered on Windows")
+	}
 	s, id, root := setup(t)
 	gitTest(t, root, "init", "-q")
 	write(t, root, "a.txt", "content\n")

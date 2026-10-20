@@ -7,6 +7,7 @@ import (
 	"github.com/rainchan/webmux/internal/config"
 	"github.com/rainchan/webmux/internal/session"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,9 @@ import (
 
 func TestDisconnectDuringBlockedInputDetachesClient(t *testing.T) {
 	c := config.Config{Presets: []session.Preset{{Name: "blocked", Cmd: []string{"/bin/bash", "-c", "stty raw -echo; printf READY; sleep 30"}}}}
+	if runtime.GOOS == "windows" {
+		c.Presets[0].Cmd = apiProcess("wait", "READY")
+	}
 	m := session.NewManager(session.Options{DefaultCwd: t.TempDir(), Presets: c.Presets})
 	server := httptest.NewServer(New(c, m, testWorkspace(t, m, t.TempDir())))
 	defer server.Close()

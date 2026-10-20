@@ -24,6 +24,7 @@
     status,
     paste,
     draftEnabled,
+    command,
     refresh,
     openSide,
     beginOpen,
@@ -39,6 +40,7 @@
     status: string;
     paste: (text: string) => TextInsertion;
     draftEnabled: boolean;
+    command?: string[];
     refresh: () => void;
     openSide: (file: CodeFile, intent: number) => void;
     beginOpen: () => number;
@@ -95,7 +97,7 @@
     )
       return "";
     try {
-      return codeReference(doc, start, end);
+      return codeReference(doc, start, end, command);
     } catch {
       return "";
     }
@@ -257,7 +259,7 @@
   function referenceAt(row: number) {
     if (!doc) return;
     try {
-      return { number: row, text: codeReference(doc, row) };
+      return { number: row, text: codeReference(doc, row, undefined, command) };
     } catch {
       return;
     }

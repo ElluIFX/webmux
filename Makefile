@@ -4,6 +4,7 @@ PNPM ?= pnpm
 GOFMT ?= gofmt
 BASELINE_SAMPLES ?= 30
 BASELINE_OUTPUT ?= baseline/results/latest.json
+EXEEXT := $(if $(filter Windows_NT,$(OS)),.exe,)
 LDFLAGS = -s -w -X main.version=$(VERSION)
 
 .PHONY: web build release check test test-unit test-browser test-e2e test-browsers-install format format-check install baseline
@@ -12,13 +13,15 @@ web:
 	$(PNPM) --dir web build
 
 build: web
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux ./cmd/webmux
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux$(EXEEXT) ./cmd/webmux
 
 release: web
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-linux-amd64 ./cmd/webmux
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-linux-arm64 ./cmd/webmux
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-darwin-amd64 ./cmd/webmux
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-darwin-arm64 ./cmd/webmux
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-windows-amd64.exe ./cmd/webmux
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/webmux-windows-arm64.exe ./cmd/webmux
 
 check: web format-check
 	$(PNPM) --dir web lint

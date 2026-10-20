@@ -1,5 +1,6 @@
 <script lang="ts">
   import InlineNotice from "../components/InlineNotice.svelte";
+  import { pathBasename } from "../native-path";
   import { onMount } from "svelte";
   import {
     IconSun,
@@ -651,7 +652,7 @@
               </p>
             </div>
             {#each directPaths as path (path)}<WorkspaceGroup
-                title={path.split("/").pop() || "/"}
+                title={pathBasename(path)}
                 {path}
                 sessions={direct.filter((s) => s.cwd === path)}
                 {now}

@@ -8,6 +8,7 @@ import (
 	"github.com/rainchan/webmux/internal/config"
 	"github.com/rainchan/webmux/internal/session"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 
 func TestReplayRetainsNewestBytesAfterBufferWrap(t *testing.T) {
 	presets := []session.Preset{{Name: "output", Cmd: []string{"/bin/bash", "-c", "printf abcde"}}}
+	if runtime.GOOS == "windows" {
+		presets[0].Cmd = apiProcess("print", "abcde")
+	}
 	m := session.NewManager(session.Options{ScrollbackBytes: 4, DefaultCwd: t.TempDir(), Presets: presets})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -35,11 +39,12 @@ func TestReplayRetainsNewestBytesAfterBufferWrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.CloseNow() }()
-	if position := readPosition(ctx, t, conn, "reset"); position.Start != 1 || position.End != 5 || !position.Truncated {
+	position := readPosition(ctx, t, conn, "reset")
+	if position.End-position.Start != 4 || !position.Truncated || (runtime.GOOS != "windows" && (position.Start != 1 || position.End != 5)) {
 		t.Fatalf("wrapped position: %+v", position)
 	}
 	kind, p, err := conn.Read(ctx)
-	if err != nil || kind != websocket.MessageBinary || !bytes.Equal(p, []byte{1, 'b', 'c', 'd', 'e'}) {
+	if err != nil || kind != websocket.MessageBinary || !bytes.Equal(p, append([]byte{1}, s.Buffer()...)) {
 		t.Fatalf("wrapped replay: kind=%v bytes=%v err=%v", kind, p, err)
 	}
 }

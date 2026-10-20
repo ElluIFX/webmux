@@ -7,7 +7,7 @@
 [![Test](https://github.com/mzdluo123/webmux/actions/workflows/test.yml/badge.svg)](https://github.com/mzdluo123/webmux/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/mzdluo123/webmux)](https://github.com/mzdluo123/webmux/releases/latest)
 [![Go](https://img.shields.io/github/go-mod/go-version/mzdluo123/webmux)](go.mod)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 [快速开始](#快速开始) · [使用指南](docs/usage.md) · [部署](docs/deployment.md) · [架构](docs/architecture.md) · [协议](docs/protocol.md) · [参与贡献](CONTRIBUTING.md)
 
@@ -65,7 +65,7 @@ WebMux 是一个单二进制的 Web 终端服务。PTY 会话由服务端持有�
 - **草稿模式**：先在多行输入框里编写、组合引用和上传路径，再一次性发送给 agent；草稿保存在本机，发送有送达确认。
 - **移动端优先**：软键栏（Esc / Ctrl / Alt / 方向键等）、触摸滚动、双指缩放、长按选词复制、虚拟键盘视口适配。
 - **文件上传**：选择、拖放或粘贴文件 / 图片，上传后自动把服务器路径插入终端。
-- **零运行时依赖**：前端嵌入 Go 二进制，运行端只需 Linux 或 macOS 与一个 shell，无需 Node.js、Go、tmux 或数据库。
+- **零运行时依赖**：前端嵌入 Go 二进制，运行端只需 Linux、macOS 或 Windows 与一个 shell，无需 Node.js、Go、tmux 或数据库。
 
 ## 快速开始
 
@@ -93,6 +93,18 @@ webmux --listen 127.0.0.1:7681
 ```sh
 webmux --listen 100.64.0.5:7681 --token "$(openssl rand -hex 24)"
 ```
+
+### Windows 原生运行
+
+Windows 10 1809 / Windows Server 2019 或更新版本支持原生 ConPTY，无需 WSL。推荐 Windows 11；Git worktree 功能需要安装 Git for Windows 并加入 PATH。
+
+从本分支构建 `webmux.exe` 后，在 PowerShell 中运行：
+
+```powershell
+.\webmux.exe --listen 127.0.0.1:7681
+```
+
+Windows 构建、配置及已知差异见 [Windows 指南](docs/windows.md)。浏览器断开不会停止终端；退出服务器会结束其拥有的会话进程树。
 
 ### 从源码构建
 

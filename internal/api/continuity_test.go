@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,6 +27,9 @@ type continuityFixture struct {
 
 // recorder runs a raw, non-echoing PTY that records its input in a file.
 func recorder(path string) []string {
+	if runtime.GOOS == "windows" {
+		return apiProcess("record", path)
+	}
 	return []string{"/bin/bash", "-c", `stty raw -echo; printf READY; exec cat > "$0"`, path}
 }
 
@@ -126,7 +130,11 @@ func waitFile(t *testing.T, path, want string) {
 }
 
 func TestResumeAppendsOnlyMissingOutput(t *testing.T) {
-	f := newContinuityFixture(t, []string{"/bin/bash", "-c", `stty -echo; printf READY; read -r line; printf "after-%s" "$line"; sleep 30`})
+	argv := []string{"/bin/bash", "-c", `stty -echo; printf READY; read -r line; printf "after-%s" "$line"; sleep 30`}
+	if runtime.GOOS == "windows" {
+		argv = apiProcess("after")
+	}
+	f := newContinuityFixture(t, argv)
 	generation := f.item.Info().Generation
 	first := f.dial("client=device-one")
 	position := readPosition(f.ctx, t, first, "reset")
@@ -142,11 +150,14 @@ func TestResumeAppendsOnlyMissingOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	until := time.Now().Add(3 * time.Second)
-	for !bytes.HasSuffix(f.item.Buffer(), tail) {
+	for !bytes.HasSuffix(f.item.Buffer(), tail) && !(runtime.GOOS == "windows" && bytes.Contains(f.item.Buffer()[before:], tail)) {
 		if time.Now().After(until) {
 			t.Fatalf("output %q", f.item.Buffer())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if runtime.GOOS == "windows" {
+		tail = append([]byte(nil), f.item.Buffer()[before:]...)
 	}
 	conn := f.dial("client=device-one&generation=" + generation + "&offset=" + strconv.Itoa(before))
 	resumed := readPosition(f.ctx, t, conn, "append")
@@ -345,7 +356,11 @@ func TestQueryingClientLearnsPendingSubmissionOutcome(t *testing.T) {
 	record := filepath.Join(dir, "input")
 	// The program does not read input until the test lets it, so a body
 	// larger than the PTY input queue keeps the submission "received".
-	f := newContinuityFixture(t, []string{"/bin/bash", "-c", `stty raw -echo; printf READY; while [ ! -e "$0.go" ]; do sleep 0.05; done; exec cat > "$0"`, record})
+	argv := []string{"/bin/bash", "-c", `stty raw -echo; printf READY; while [ ! -e "$0.go" ]; do sleep 0.05; done; exec cat > "$0"`, record}
+	if runtime.GOOS == "windows" {
+		argv = apiProcess("gated-record", record)
+	}
+	f := newContinuityFixture(t, argv)
 	generation := f.item.Info().Generation
 	submitter := f.dial("client=original-tab")
 	f.send(submitter, 3, submitFrame("submission-0100", generation, strings.Repeat("x", 256*1024), "\r"))

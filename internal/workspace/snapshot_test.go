@@ -12,6 +12,7 @@ import (
 
 func TestUnknownStatusAndExecutablePermissionAreNotClean(t *testing.T) {
 	t.Parallel()
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -46,7 +47,7 @@ func TestUnknownStatusAndExecutablePermissionAreNotClean(t *testing.T) {
 	if err != nil || snapshot.Availability != "unavailable" || snapshot.Error == "" {
 		t.Fatalf("executable permission failure: %+v %v", snapshot, err)
 	}
-	item, err := s.CreateSession(context.Background(), root, "custom", []string{"/bin/sh", "-c", "printf PERMISSION_DIRECT"}, nil, "", nil)
+	item, err := s.CreateSession(context.Background(), root, "custom", testPrintCommand("PERMISSION_DIRECT"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

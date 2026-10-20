@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,9 @@ import (
 
 func TestPersistentPTY(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Bash fixture; native ConPTY lifecycle/replay is covered by TestWindowsConPTYInputResizeReplayAndExit")
+	}
 	m := NewManager(Options{DefaultCwd: t.TempDir(), Presets: []Preset{{Name: "shell", Cmd: []string{"/bin/bash", "--noprofile", "--norc", "-i"}}}})
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
@@ -59,16 +63,8 @@ func TestPersistentPTY(t *testing.T) {
 
 func TestResizeFromRequiresTheControllingConnection(t *testing.T) {
 	t.Parallel()
-	m := NewManager(Options{DefaultCwd: t.TempDir(), Presets: []Preset{{Name: "idle", Cmd: []string{"/bin/sleep", "30"}}}})
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-		defer cancel()
-		m.Shutdown(ctx)
-	}()
-	s, err := m.Create("", "idle", nil, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := newIdleSession(t, "/bin/sleep", "30")
+	var err error
 	first := s.AttachClient(AttachOptions{Client: "first-client"})
 	defer s.Detach(first)
 	second := s.AttachClient(AttachOptions{Client: "second-client"})
@@ -102,6 +98,14 @@ func TestResizeFromRequiresTheControllingConnection(t *testing.T) {
 
 func newIdleSession(t *testing.T, cmd ...string) *Session {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		if cmd[0] == "/bin/sleep" {
+			cmd = []string{"cmd.exe", "/d", "/c", "ping -n 31 127.0.0.1 >NUL"}
+		}
+		if cmd[0] == "/usr/bin/true" {
+			cmd = []string{"cmd.exe", "/d", "/c", "exit 0"}
+		}
+	}
 	m := NewManager(Options{DefaultCwd: t.TempDir(), Presets: []Preset{{Name: "idle", Cmd: cmd}}})
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)

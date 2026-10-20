@@ -82,7 +82,7 @@ func NewManager(o Options) *Manager {
 	return m
 }
 func ExpandPath(path string) (string, error) {
-	if path == "~" || strings.HasPrefix(path, "~/") {
+	if path == "~" || strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(os.PathSeparator)) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err

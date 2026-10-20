@@ -15,22 +15,25 @@ const doc = CodeDocumentSchema.parse({
   reason: "",
 });
 describe("code references", () => {
-  it("keeps shell metacharacters literal when a user submits a reference", () => {
-    for (const absolutePath of [
-      "/repo/a$(printf${IFS}AUDIT)",
-      "/repo/a`printf AUDIT`",
-      "/repo/a;printf AUDIT",
-      "/repo/a 'quoted' file",
-      "/repo/a*[1]",
-    ]) {
-      const reference = codeReference({ ...doc, absolutePath });
-      expect(
-        execFileSync("/bin/sh", ["-c", "printf '%s' " + reference], {
-          encoding: "utf8",
-        }),
-      ).toBe(absolutePath);
-    }
-  });
+  it.skipIf(process.platform === "win32")(
+    "keeps shell metacharacters literal when a user submits a reference",
+    () => {
+      for (const absolutePath of [
+        "/repo/a$(printf${IFS}AUDIT)",
+        "/repo/a`printf AUDIT`",
+        "/repo/a;printf AUDIT",
+        "/repo/a 'quoted' file",
+        "/repo/a*[1]",
+      ]) {
+        const reference = codeReference({ ...doc, absolutePath });
+        expect(
+          execFileSync("/bin/sh", ["-c", "printf '%s' " + reference], {
+            encoding: "utf8",
+          }),
+        ).toBe(absolutePath);
+      }
+    },
+  );
   it("formats ordinary lines and source versions without submitting input", () => {
     expect(codeReference(doc, 12, 18)).toBe("/repo/src/main.go:12-18 ");
     expect(codeReference({ ...doc, source: "index" }, 2)).toBe(

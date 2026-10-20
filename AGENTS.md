@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-WebMux is a single-user Linux/macOS web terminal for persistent PTY sessions, including shells and CLI agents. Browser disconnection does not end a session; server restart does. The Go binary embeds the browser app. This is not a process sandbox, durable session store, or tmux wrapper: commands run as the service user. Keep deployments on loopback or a trusted VPN; do not expose an unrestricted shell publicly.
+WebMux is a single-user Linux/macOS/Windows web terminal for persistent PTY sessions, including shells and CLI agents. Browser disconnection does not end a session; server restart does. The Go binary embeds the browser app. This is not a process sandbox, durable session store, or tmux wrapper: commands run as the service user. Keep deployments on loopback or a trusted VPN; do not expose an unrestricted shell publicly.
 
 ## Architecture & Data Flow
 
@@ -35,7 +35,7 @@ Run from the repository root:
 | `pnpm --dir web install --frozen-lockfile` | Install locked frontend dependencies.                                     |
 | `make web`                                 | Install dependencies, run Svelte/TypeScript checks, and build `web/dist`. |
 | `make build`                               | Build frontend first, then the embedded Go executable `bin/webmux`.       |
-| `make release`                             | Build Linux and macOS (darwin) amd64 and arm64 binaries.                  |
+| `make release`                             | Build Linux, macOS (darwin), and Windows amd64/arm64 binaries.            |
 | `./bin/webmux --listen 127.0.0.1:7681`     | Run the backend and embedded production app.                              |
 | `pnpm --dir web dev`                       | Run Vite at `http://127.0.0.1:5173`.                                      |
 | `pnpm --dir web check`                     | Check Svelte/TypeScript without building.                                 |
@@ -69,7 +69,7 @@ Vite proxies `/api` and `/ws` to backend port 7681. Run the backend separately a
 
 Use Go 1.26+, Node.js 24 LTS, pnpm 12.11.2, and GNU Make. Use pnpm—not npm, Yarn, or Bun—to manage frontend dependencies; retain the frozen lockfile workflow and the `esbuild`-only dependency build-script allowlist.
 
-Production needs only the Linux or macOS binary, a shell, and any chosen CLI agents; it does not require Node or Go. `deploy/webmux.service` (systemd) and `deploy/com.webmux.plist` (launchd) are the service examples. Release builds use `CGO_ENABLED=0`. `make check` needs a separately installed `golangci-lint`; current CI does not run that lint target. OpenSpec 1.13.0 is optional workflow tooling, not a frontend runtime dependency.
+Production needs only the Linux, macOS, or Windows binary, a shell, and any chosen CLI agents; it does not require Node or Go. `deploy/webmux.service` (systemd) and `deploy/com.webmux.plist` (launchd) are the service examples. Release builds use `CGO_ENABLED=0`. `make check` needs a separately installed `golangci-lint`; current CI does not run that lint target. OpenSpec 1.13.0 is optional workflow tooling, not a frontend runtime dependency.
 
 ## Testing & QA
 
@@ -93,3 +93,9 @@ make test-browsers-install        # Chromium (+ Linux libraries; may require sud
 - PRs that change visible UI (layout, styling, components, or interaction states) MUST embed screenshots of the final implementation in the PR description. Capture the running app or its real Storybook components; mockups and test summaries do not replace screenshots.
 - Show before/after views for changes to an existing interface. Include the affected light/dark themes and desktop/mobile layouts when the change spans them, and label the viewport and any sample data.
 - Use GitHub attachments or committed image URLs that reviewers can open; local filesystem paths and localhost URLs are not valid PR image links. Check that the images render in the published PR and refresh them when later changes alter the UI. Use isolated fixtures or demo sessions without credentials or private terminal output.
+
+## Windows platform boundaries
+
+Keep platform support additive: shared session replay, HTTP/WebSocket contracts, and workspace semantics must stay platform-neutral. Use narrowly scoped `_windows.go` / Unix build-tag helpers for ConPTY/process ownership, safe filesystem opening, locks, and command cancellation. Windows terminal processes belong to kill-on-close Job Objects. Never replace safe codeview traversal with a path-check-then-open implementation or disable worktree/codeview on Windows to make a build pass.
+
+The Windows CI job executes native Go runtime/race tests, frontend unit/browser tests, and a Windows-specific E2E smoke test. Existing Unix shell-heavy browser E2E suites still run on Ubuntu/macOS. Cross-compilation alone is not Windows runtime validation. See `docs/windows.md` for prerequisites and local commands.

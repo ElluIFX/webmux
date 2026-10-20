@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,11 @@ func TestProtocolAndSecurity(t *testing.T) {
 	if err != nil || kind != websocket.MessageBinary || p[0] != 1 {
 		t.Fatalf("initial frame %v %v %v", kind, p, err)
 	}
-	if err = conn.Write(ctx, websocket.MessageBinary, session.Frame(0, []byte("printf 'FINAL_OUTPUT_MARKER\\n'; exit 6\n"))); err != nil {
+	command := "printf 'FINAL_OUTPUT_MARKER\\n'; exit 6\n"
+	if runtime.GOOS == "windows" {
+		command = "Write-Output 'FINAL_OUTPUT_MARKER'; exit 6\r"
+	}
+	if err = conn.Write(ctx, websocket.MessageBinary, session.Frame(0, []byte(command))); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -153,6 +158,7 @@ func TestProtocolAndSecurity(t *testing.T) {
 func TestDirectoryPickerListsAllDirectories(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
 	names := []string{"webmux", "zz directory"}
 	for i := range 25 {
 		names = append(names, fmt.Sprintf(".cache-%02d", i))
@@ -224,17 +230,14 @@ func TestDirectoryPickerListsAllDirectories(t *testing.T) {
 
 func TestCustomCommandExecutesLiteralArgvInSelectedDirectory(t *testing.T) {
 	cwd := t.TempDir()
-	script := "#!/bin/sh\nprintf 'cwd=%s\\n' \"$PWD\"\nprintf '<%s>\\n' \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(cwd, "report"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
 	m := session.NewManager(session.Options{DefaultCwd: t.TempDir()})
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 		defer cancel()
 		m.Shutdown(ctx)
 	}()
-	cmd := []string{"./report", "two words", `"quoted value"`, "$HOME", "*", "$(touch sentinel)", "; exit 9"}
+	args := []string{"two words", `"quoted value"`, "$HOME", "*", "$(touch sentinel)", "; exit 9"}
+	cmd := apiProcess("argv", args...)
 	body, err := json.Marshal(map[string]any{"cwd": cwd, "preset": "custom", "cmd": cmd, "args": []string{}, "name": "My command"})
 	if err != nil {
 		t.Fatal(err)
@@ -269,11 +272,19 @@ func TestCustomCommandExecutesLiteralArgvInSelectedDirectory(t *testing.T) {
 				t.Fatalf("custom command exit: %+v", info)
 			}
 			want := "cwd=" + cwd + "\r\n"
-			for _, arg := range cmd[1:] {
+			for _, arg := range args {
 				want += "<" + arg + ">\r\n"
 			}
-			if got := string(item.Buffer()); got != want {
+			if got := string(item.Buffer()); runtime.GOOS != "windows" && !strings.Contains(got, want) {
 				t.Fatalf("PTY output = %q, want %q", got, want)
+			}
+			var report struct {
+				Cwd  string
+				Args []string
+			}
+			data, readErr := os.ReadFile(filepath.Join(cwd, "argv-result.json"))
+			if readErr != nil || json.Unmarshal(data, &report) != nil || report.Cwd != cwd || !reflect.DeepEqual(report.Args, args) {
+				t.Fatalf("native argv report: %s (%v)", data, readErr)
 			}
 			if _, err := os.Stat(filepath.Join(cwd, "sentinel")); !os.IsNotExist(err) {
 				t.Fatalf("shell expansion created sentinel: %v", err)
@@ -287,8 +298,8 @@ func TestCustomCommandExecutesLiteralArgvInSelectedDirectory(t *testing.T) {
 
 func TestSessionCreationRejectsCommandConflicts(t *testing.T) {
 	presets := []session.Preset{
-		{Name: "fixed", Cmd: []string{"/bin/echo", "fixed"}},
-		{Name: "with-args", Cmd: []string{"/bin/echo", "preset"}, AllowArgs: true},
+		{Name: "fixed", Cmd: apiProcess("print", "fixed")},
+		{Name: "with-args", Cmd: apiProcess("print", "preset"), AllowArgs: true},
 	}
 	m := session.NewManager(session.Options{DefaultCwd: t.TempDir(), Presets: presets})
 	defer func() {
@@ -334,7 +345,7 @@ func TestSessionCreationRejectsCommandConflicts(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &info); err != nil {
 		t.Fatal(err)
 	}
-	if info.Preset != "with-args" || !reflect.DeepEqual(info.Cmd, []string{"/bin/echo", "preset", "two words", "$HOME"}) {
+	if info.Preset != "with-args" || !reflect.DeepEqual(info.Cmd, append(apiProcess("print", "preset"), "two words", "$HOME")) {
 		t.Fatalf("preset arguments: %+v", info)
 	}
 }

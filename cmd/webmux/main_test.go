@@ -4,10 +4,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
 func TestConfigurationPrecedence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell environment precedence; Windows defaults covered by config tests")
+	}
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("SHELL", "/bin/sh")

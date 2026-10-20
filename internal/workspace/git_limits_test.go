@@ -10,6 +10,7 @@ import (
 )
 
 func TestWorkspaceGitBoundsBothOutputStreams(t *testing.T) {
+	requireUnixFixture(t)
 	for _, stream := range []string{"stdout", "stderr"} {
 		t.Run(stream, func(t *testing.T) {
 			dir := t.TempDir()

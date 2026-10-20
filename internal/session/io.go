@@ -3,38 +3,8 @@ package session
 import (
 	"context"
 	"os"
-	"syscall"
 	"time"
 )
-
-// A nonblocking descriptor handed to NewFile participates in Go's poller.
-// Duplicating transfers ownership without retaining two File finalizers on one fd.
-func pollablePTY(original *os.File) (*os.File, error) {
-	syscall.ForkLock.RLock()
-	fd, err := syscall.Dup(int(original.Fd()))
-	if err == nil {
-		syscall.CloseOnExec(fd)
-	}
-	syscall.ForkLock.RUnlock()
-	if err != nil {
-		return nil, err
-	}
-	if err = syscall.SetNonblock(fd, true); err != nil {
-		_ = syscall.Close(fd)
-		return nil, err
-	}
-	name := original.Name()
-	if err = original.Close(); err != nil {
-		_ = syscall.Close(fd)
-		return nil, err
-	}
-	f := os.NewFile(uintptr(fd), name)
-	if err = f.SetReadDeadline(time.Time{}); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	return f, nil
-}
 
 // WriteContext serializes input, but a disconnected client can abandon both
 // the serialization wait and a full kernel input queue without ending the PTY.

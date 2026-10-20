@@ -1,6 +1,9 @@
 package session
 
-import "strings"
+import (
+	"runtime"
+	"strings"
+)
 
 // Identity variables of the terminal or multiplexer that started webmux. Left
 // in place they make programs target that host (for example DCS-wrapping
@@ -20,6 +23,9 @@ func sessionEnv(base []string, id string, agentProtocol bool) []string {
 	env := make([]string, 0, len(base)+4)
 	for _, entry := range base {
 		name, _, _ := strings.Cut(entry, "=")
+		if runtime.GOOS == "windows" {
+			name = strings.ToUpper(name)
+		}
 		if hostTerminalNames[name] || hasAnyPrefix(name, hostTerminalPrefixes) {
 			continue
 		}

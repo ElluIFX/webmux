@@ -31,6 +31,7 @@ func TestNULRecordsAcrossChunksAndCallbackFailure(t *testing.T) {
 }
 
 func TestStreamedGitHasNoTotalOutputLimitAndCancels(t *testing.T) {
+	requireUnixFixture(t)
 	dir := t.TempDir()
 	script := filepath.Join(dir, "git")
 	t.Setenv("PATH", dir)

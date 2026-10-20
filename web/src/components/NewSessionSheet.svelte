@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pathBasename, isWindowsPath } from "../native-path";
   import { MediaQuery } from "svelte/reactivity";
   import { untrack } from "svelte";
   import {
@@ -98,7 +99,10 @@
     busy = true;
     error = "";
     try {
-      const cmd = custom && !treeOnly ? parseArgs(command) : undefined;
+      const cmd =
+        custom && !treeOnly
+          ? parseArgs(command, isWindowsPath(defaultCwd))
+          : undefined;
       if (custom && !treeOnly && (!cmd?.length || !cmd[0]))
         throw new Error("请输入可执行程序及参数");
       if (mode === "new") {
@@ -128,7 +132,10 @@
           ? { cwd }
           : { workspace: { repositoryId, worktreeId } }),
         preset,
-        args: !custom && chosen?.allowArgs ? parseArgs(args) : [],
+        args:
+          !custom && chosen?.allowArgs
+            ? parseArgs(args, isWindowsPath(defaultCwd))
+            : [],
         ...(custom ? { cmd } : {}),
         name,
       };
@@ -288,7 +295,7 @@
                   title={dir}
                   onclick={() => {
                     cwd = dir;
-                  }}>{dir.split("/").pop() || "/"}</Button
+                  }}>{pathBasename(dir)}</Button
                 >{/each}
             </div>
           {/if}

@@ -32,7 +32,7 @@ func isolateGit(t *testing.T) {
 }
 func initRepo(t *testing.T) string {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "repo with space\nand newline")
+	root := filepath.Join(t.TempDir(), testRepositoryName())
 	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +101,7 @@ func waitOutput(t *testing.T, item *session.Session, needle string) {
 
 func TestRegistryIdentityPersistenceAndRemoval(t *testing.T) {
 	t.Parallel()
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	state := t.TempDir()
@@ -216,7 +217,7 @@ func TestRegistryFaultsDoNotPublishOrOverwrite(t *testing.T) {
 	if err := json.Unmarshal(original, &stored); err != nil || len(stored.Repositories) != 1 {
 		t.Fatalf("original registry: %v", err)
 	}
-	item, err := broken.CreateSession(context.Background(), root, "custom", []string{"/bin/sh", "-c", "printf DEGRADED"}, nil, "", nil)
+	item, err := broken.CreateSession(context.Background(), root, "custom", testPrintCommand("DEGRADED"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +236,7 @@ func TestNoGitAndNonRepositoryRemainDirect(t *testing.T) {
 	if _, _, err := s.Register(context.Background(), root); Status(err) != 503 {
 		t.Fatalf("missing Git error: %v", err)
 	}
-	item, err := s.CreateSession(context.Background(), "", "custom", []string{"/bin/sh", "-c", "printf DIRECT"}, nil, "", nil)
+	item, err := s.CreateSession(context.Background(), "", "custom", testPrintCommand("DIRECT"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

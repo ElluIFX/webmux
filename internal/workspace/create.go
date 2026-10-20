@@ -133,7 +133,7 @@ func (s *Service) CreateWorktree(ctx context.Context, repositoryID string, req C
 		return Worktree{}, problem(500, "Git 创建已完成但刷新失败: %s", actual.Error)
 	}
 	for _, tree := range actual.Worktrees {
-		if tree.Path == path {
+		if pathKey(tree.Path) == pathKey(path) {
 			return tree, nil
 		}
 	}

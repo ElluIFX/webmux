@@ -222,7 +222,7 @@ func (s *Server) dirs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dir, base := filepath.Split(expanded)
-	if strings.HasSuffix(prefix, "/") || prefix == "~" {
+	if strings.HasSuffix(prefix, "/") || strings.HasSuffix(prefix, string(os.PathSeparator)) || prefix == "~" {
 		dir = expanded
 		base = ""
 	}

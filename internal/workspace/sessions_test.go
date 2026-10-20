@@ -13,6 +13,7 @@ import (
 
 func TestMultiplePTYsKeepRealChildCwdAndIndependentBuffers(t *testing.T) {
 	t.Parallel()
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, m := testService(t, t.TempDir(), root)
@@ -67,6 +68,7 @@ func TestMultiplePTYsKeepRealChildCwdAndIndependentBuffers(t *testing.T) {
 }
 func TestExplicitWorkspaceNeverFallsBackOrMatchesNestedRepository(t *testing.T) {
 	t.Parallel()
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -82,7 +84,7 @@ func TestExplicitWorkspaceNeverFallsBackOrMatchesNestedRepository(t *testing.T) 
 			t.Fatalf("conflicting cwd accepted: %q", cwd)
 		}
 	}
-	direct, err := s.CreateSession(context.Background(), nested, "custom", []string{"/bin/sh", "-c", "printf NESTED"}, nil, "", nil)
+	direct, err := s.CreateSession(context.Background(), nested, "custom", testPrintCommand("NESTED"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +112,7 @@ func TestExplicitWorkspaceNeverFallsBackOrMatchesNestedRepository(t *testing.T) 
 }
 func TestCloseTimeoutDoesNotDeleteTreeAndReleasesReservation(t *testing.T) {
 	t.Parallel()
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -129,7 +132,7 @@ func TestCloseTimeoutDoesNotDeleteTreeAndReleasesReservation(t *testing.T) {
 	}
 	assertExists(t, tree.Path)
 	waitDone(t, item)
-	next, err := s.CreateSession(context.Background(), tree.Path, "custom", []string{"/bin/sh", "-c", "printf RELEASED"}, nil, "", nil)
+	next, err := s.CreateSession(context.Background(), tree.Path, "custom", testPrintCommand("RELEASED"), nil, "", nil)
 	if err != nil {
 		t.Fatal("timeout retained reservation", err)
 	}

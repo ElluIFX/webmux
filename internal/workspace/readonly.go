@@ -5,12 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/rainchan/webmux/internal/session"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -72,22 +70,11 @@ func runReadGit(ctx context.Context, cwd string, input io.Reader, overrides []st
 	prefix = append(prefix, overrides...)
 	cmd := exec.CommandContext(ctx, "git", append(prefix, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "LC_ALL=C")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
 	cmd.Stdin = input
 	cmd.WaitDelay = time.Second
 	stderr := &boundedOutput{limit: 8192, cancel: cancel}
 	cmd.Stdout, cmd.Stderr = out, stderr
-	err := session.RunCommand(cmd)
-	if cmd.Process != nil && (ctx.Err() != nil || errors.Is(err, exec.ErrWaitDelay)) {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	err := runGitCommand(ctx, cmd)
 	if stderr.exceeded {
 		return problem(413, "Git 输出超过读取限制")
 	}

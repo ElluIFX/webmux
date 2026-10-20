@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/rainchan/webmux/internal/session"
@@ -30,25 +29,11 @@ func (s *Service) git(ctx context.Context, cwd string, args ...string) ([]byte, 
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.gitPath, append([]string{"-C", cwd}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never", "LC_ALL=C")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
 	cmd.WaitDelay = time.Second
 	stdout := &boundedOutput{limit: maxWorkspaceGitOutput, cancel: cancel}
 	stderr := &boundedOutput{limit: maxWorkspaceGitError, cancel: cancel}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err := session.RunCommand(cmd); err != nil {
-		// Cmd's context watcher can finish when the leader exits, before pipe
-		// copying ends. A hook's background children may still hold those pipes;
-		// WaitDelay closes descriptors, but does not terminate that process group.
-		if cmd.Process != nil && (ctx.Err() != nil || errors.Is(err, exec.ErrWaitDelay)) {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
+	if err := runGitCommand(ctx, cmd); err != nil {
 		if stdout.exceeded || stderr.exceeded {
 			return nil, problem(413, "Git 输出超过限制，实际状态可能已变化；请刷新")
 		}
@@ -95,7 +80,7 @@ func canonicalTarget(path string) (string, error) {
 	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 func within(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
+	rel, err := filepath.Rel(pathKey(root), pathKey(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
 }
 func overlap(a, b string) bool      { return within(a, b) || within(b, a) }
@@ -264,7 +249,7 @@ func (s *Service) readRepository(ctx context.Context, r *repositoryState) Reposi
 	e := r.entry
 	result := Repository{ID: e.ID, Name: e.DisplayName, CommonDir: e.CommonDir, AnchorPath: e.AnchorPath, Availability: "unavailable", CheckedAt: time.Now().UTC(), Worktrees: []Worktree{}}
 	common, err := s.common(ctx, e.AnchorPath)
-	if err == nil && common != e.CommonDir {
+	if err == nil && pathKey(common) != pathKey(e.CommonDir) {
 		err = errors.New("仓库 common directory 身份已改变，请移除并重新注册")
 	}
 	if err != nil {
@@ -293,7 +278,7 @@ func (s *Service) readRepository(ctx context.Context, r *repositoryState) Reposi
 			continue
 		}
 		actual, checkErr := s.common(ctx, tree.Path)
-		if checkErr != nil || actual != e.CommonDir {
+		if checkErr != nil || pathKey(actual) != pathKey(e.CommonDir) {
 			tree.Error = fmt.Sprintf("无法验证工作树身份: %v", checkErr)
 			continue
 		}
@@ -415,7 +400,7 @@ func (s *Service) unsupportedContents(ctx context.Context, tree Worktree) error 
 		if path == tree.Path {
 			return nil
 		}
-		if entry.Name() == ".git" {
+		if strings.EqualFold(entry.Name(), ".git") {
 			if filepath.Dir(path) != tree.Path {
 				return errors.New("工作树含嵌套 Git 仓库，请在终端处理")
 			}

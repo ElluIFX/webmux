@@ -11,8 +11,9 @@ import (
 
 func TestNULParsersPreservePathsAndRenameRecords(t *testing.T) {
 	// Absent roots keep the parser test free of host symlinks such as macOS /tmp.
-	path := "/webmux-absent/path with spaces\nand newline"
-	trees, err := parseWorktrees([]byte("worktree "+path+"\x00HEAD abc123\x00branch refs/heads/main\x00future value\x00\x00worktree /webmux-absent/linked\x00HEAD def456\x00detached\x00locked reason with\nnewline\x00\x00"), "repo")
+	path := filepath.Join(t.TempDir(), "absent", testRepositoryName())
+	linked := filepath.Join(t.TempDir(), "linked")
+	trees, err := parseWorktrees([]byte("worktree "+path+"\x00HEAD abc123\x00branch refs/heads/main\x00future value\x00\x00worktree "+linked+"\x00HEAD def456\x00detached\x00locked reason with\nnewline\x00\x00"), "repo")
 	if err != nil || len(trees) != 2 || trees[0].Path != path || !trees[1].Detached || trees[1].LockReason != "reason with\nnewline" {
 		t.Fatalf("NUL parser: %+v %v", trees, err)
 	}
@@ -32,11 +33,11 @@ func TestSnapshotsTrackExternalStateAndProtectedContents(t *testing.T) {
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
 	r := registerTest(t, s, root)
-	path := filepath.Join(t.TempDir(), "external\nworktree")
+	path := filepath.Join(t.TempDir(), testFilename("external\nworktree"))
 	gitTest(t, root, "worktree", "add", "-b", "external", path, "HEAD")
 	gitTest(t, path, "checkout", "--detach")
 	putFile(t, filepath.Join(path, "tracked"), "modified\n")
-	putFile(t, filepath.Join(path, "unknown\nname"), "untracked")
+	putFile(t, filepath.Join(path, testFilename("unknown\nname")), "untracked")
 	putFile(t, filepath.Join(path, ".env"), "secret")
 	gitTest(t, root, "worktree", "lock", "--reason", "keep\nreason", path)
 	snapshot, err := s.Refresh(context.Background(), r.ID)
@@ -84,7 +85,7 @@ func TestBareUnbornAndBranchBaselines(t *testing.T) {
 	if _, err := s.CreateWorktree(context.Background(), r.ID, CreateRequest{Path: filepath.Join(t.TempDir(), "unborn"), Mode: "new", Branch: "topic", Base: "HEAD"}); Status(err) != 400 {
 		t.Fatalf("unborn creation: %v", err)
 	}
-	item, err := s.CreateSession(context.Background(), "", "custom", []string{"/bin/sh", "-c", "printf UNBORN"}, nil, "", &Reference{r.ID, r.Worktrees[0].ID})
+	item, err := s.CreateSession(context.Background(), "", "custom", testPrintCommand("UNBORN"), nil, "", &Reference{r.ID, r.Worktrees[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestBareUnbornAndBranchBaselines(t *testing.T) {
 	if err != nil || branches.DefaultBase != nil || len(branches.Bases) == 0 || branches.DefaultParent != bare+".worktrees" {
 		t.Fatalf("bare branches: %+v %v", branches, err)
 	}
-	if _, err := s.CreateSession(context.Background(), "", "custom", []string{"/bin/sh"}, nil, "", &Reference{br.ID, br.Worktrees[0].ID}); Status(err) != 409 {
+	if _, err := s.CreateSession(context.Background(), "", "custom", testPrintCommand("BARE"), nil, "", &Reference{br.ID, br.Worktrees[0].ID}); Status(err) != 409 {
 		t.Fatalf("bare launch: %v", err)
 	}
 	tree, err := s.CreateWorktree(context.Background(), br.ID, CreateRequest{Path: filepath.Join(t.TempDir(), "bare linked"), Mode: "new", Branch: "topic", Base: "refs/heads/main"})
@@ -135,7 +136,7 @@ func TestCreationContractsAndNoEnvironmentCopy(t *testing.T) {
 	if err != nil || existing.Branch == nil || *existing.Branch != "existing" {
 		t.Fatalf("existing branch: %+v %v", existing, err)
 	}
-	newPath := filepath.Join(t.TempDir(), "new\ntree")
+	newPath := filepath.Join(t.TempDir(), testFilename("new\ntree"))
 	created, err := s.CreateWorktree(context.Background(), r.ID, CreateRequest{Path: newPath, Mode: "new", Branch: "feature/foo", Base: "refs/remotes/origin/local-only"})
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +170,7 @@ func TestCreationContractsAndNoEnvironmentCopy(t *testing.T) {
 	if _, err := s.CreateSession(context.Background(), "", "custom", []string{"/missing/agent"}, nil, "", &Reference{r.ID, created.ID}); Status(err) != 400 {
 		t.Fatalf("agent failure: %v", err)
 	}
-	item, err := s.CreateSession(context.Background(), "", "custom", []string{"/bin/sh", "-c", "printf RETRY"}, nil, "", &Reference{r.ID, created.ID})
+	item, err := s.CreateSession(context.Background(), "", "custom", testPrintCommand("RETRY"), nil, "", &Reference{r.ID, created.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +180,7 @@ func TestCreationContractsAndNoEnvironmentCopy(t *testing.T) {
 	}
 }
 func TestFailedGitCreationExposesResidueAndCancellationReapsCommand(t *testing.T) {
+	requireUnixFixture(t)
 	isolateGit(t)
 	root := initRepo(t)
 	s, _ := testService(t, t.TempDir(), root)
@@ -202,7 +204,7 @@ func TestFailedGitCreationExposesResidueAndCancellationReapsCommand(t *testing.T
 		t.Fatal("partial worktree hidden", err)
 	}
 	gitTest(t, root, "show-ref", "--verify", "refs/heads/partial")
-	item, err := s.CreateSession(context.Background(), "", "custom", []string{"/bin/sh", "-c", "printf RESIDUE"}, nil, "", &Reference{r.ID, tree.ID})
+	item, err := s.CreateSession(context.Background(), "", "custom", testPrintCommand("RESIDUE"), nil, "", &Reference{r.ID, tree.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +271,7 @@ func TestGitTrustAndPermissionErrorsNeverBecomeClean(t *testing.T) {
 	if strings.Contains(gitLocalConfig(t, root), "safe.directory") {
 		t.Fatal("service modified repository trust")
 	}
-	item, err := s.CreateSession(context.Background(), root, "custom", []string{"/bin/sh", "-c", "printf TRUST_DIRECT"}, nil, "", nil)
+	item, err := s.CreateSession(context.Background(), root, "custom", testPrintCommand("TRUST_DIRECT"), nil, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,10 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
-
-	"github.com/creack/pty"
 )
 
 type Status string
@@ -77,7 +74,7 @@ type Session struct {
 	inputGate chan struct{}
 	info      Info
 	userTitle string
-	terminal  *os.File
+	terminal  terminalIO
 	cmd       *exec.Cmd
 	ring      *RingBuffer
 	osc       OSCScanner
@@ -109,27 +106,12 @@ func start(id, cwd, preset, name string, argv []string, capacity int, options st
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = sessionEnv(os.Environ(), id, options.agentProtocol)
-	f, err := startPTY(cmd, &pty.Winsize{Rows: 24, Cols: 80})
-	if err != nil {
-		return nil, err
-	}
-	pollable, err := pollablePTY(f)
-	if err != nil {
-		_ = f.Close()
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Wait()
-		releaseLeader(cmd.Process.Pid)
-		cleanupProcesses(cmd.Process.Pid, id)
-		return nil, err
-	}
-	f = pollable
 	var raw [8]byte
-	if _, err = rand.Read(raw[:]); err != nil {
-		_ = f.Close()
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Wait()
-		releaseLeader(cmd.Process.Pid)
-		cleanupProcesses(cmd.Process.Pid, id)
+	if _, err := rand.Read(raw[:]); err != nil {
+		return nil, err
+	}
+	f, err := startTerminal(cmd, id)
+	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
@@ -378,7 +360,7 @@ func (s *Session) resizeLocked(cols, rows uint16) error {
 	if cols == s.info.Cols && rows == s.info.Rows {
 		return nil
 	}
-	err := pty.Setsize(s.terminal, &pty.Winsize{Cols: cols, Rows: rows})
+	err := resizeTerminal(s.terminal, cols, rows)
 	if err == nil {
 		s.info.Cols = cols
 		s.info.Rows = rows
@@ -417,17 +399,9 @@ func (s *Session) read() {
 	}
 }
 func (s *Session) wait() {
-	err := s.cmd.Wait()
+	code := waitTerminal(s.cmd, s.terminal)
 	releaseLeader(s.cmd.Process.Pid)
-	code := 0
-	if err != nil {
-		code = s.cmd.ProcessState.ExitCode()
-		if code < 0 {
-			if status, ok := s.cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
-				code = 128 + int(status.Signal())
-			}
-		}
-	} // Drain final PTY bytes before publishing exit.
+	// Drain final PTY bytes before publishing exit.
 	s.Close()
 	<-s.cleanupDone
 	select {
@@ -450,7 +424,7 @@ func (s *Session) wait() {
 }
 func (s *Session) Close() {
 	s.closeOnce.Do(func() {
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGHUP)
+		hangupTerminal(s.cmd.Process.Pid)
 		go func() {
 			defer close(s.cleanupDone)
 			cleanupProcesses(s.cmd.Process.Pid, s.info.ID)

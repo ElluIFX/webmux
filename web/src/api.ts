@@ -165,7 +165,7 @@ export function recentDirs(): string[] {
   }
 }
 // Split extra argv without executing a shell. Quoted paths and empty arguments are preserved.
-export function parseArgs(input: string): string[] {
+export function parseArgs(input: string, windows = false): string[] {
   const result: string[] = [];
   let token = "",
     quote = "",
@@ -176,7 +176,7 @@ export function parseArgs(input: string): string[] {
       token += c;
       escaped = false;
       started = true;
-    } else if (c === "\\" && quote !== "'") {
+    } else if (c === "\\" && quote !== "'" && !windows) {
       escaped = true;
       started = true;
     } else if (quote) {
