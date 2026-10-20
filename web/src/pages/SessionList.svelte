@@ -289,13 +289,15 @@
 </script>
 
 <div class="workspace-page min-h-dvh">
-  <header class="border-b bg-card">
+  <header
+    class="app-header workspace-header flex min-h-(--app-header-height) items-center border-b bg-card"
+  >
     <div
-      class="mx-auto flex min-h-20 max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-8"
+      class="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-0.5 sm:px-8"
     >
       <a class="brand" href="/"><span class="brand-mark">WM</span> WebMux</a>
       <div
-        class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 sm:gap-3"
+        class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1 sm:gap-2"
       >
         <span
           class="hidden items-center gap-2 text-xs text-muted-foreground sm:flex"
@@ -303,19 +305,19 @@
             class={`status-dot ${connection === "connected" ? "status-running" : "status-waiting"}`}
           ></span>{connection === "connected" ? "本机在线" : "正在连接"}</span
         >
-        <Button disabled={!presets.length} onclick={() => start()}
+        <Button size="sm" disabled={!presets.length} onclick={() => start()}
           >＋ 新建会话</Button
         >
         <Button
           href="/settings"
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           aria-label="设置"
           title="设置"><IconSettings aria-hidden="true" /></Button
         >
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           class="shrink-0"
           aria-label={dark ? "切换为白色主题" : "切换为黑色主题"}
           title={dark ? "切换为白色主题" : "切换为黑色主题"}
