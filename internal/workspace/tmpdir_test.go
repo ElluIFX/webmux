@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -12,9 +13,14 @@ func TestMain(m *testing.M) {
 }
 
 func runWorkspaceTests(m *testing.M) (status int) {
-	// macOS paths must agree with canonical session/worktree paths.
+	// Canonicalize macOS symlinks and Windows 8.3 aliases before creating
+	// fixtures so they agree with session and worktree paths.
 	if dir, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
 		_ = os.Setenv("TMPDIR", dir)
+		if runtime.GOOS == "windows" {
+			_ = os.Setenv("TMP", dir)
+			_ = os.Setenv("TEMP", dir)
+		}
 	}
 	home, err := os.MkdirTemp("", "webmux-workspace-test-home-")
 	if err != nil {

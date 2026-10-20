@@ -101,6 +101,13 @@ func startTerminal(cmd *exec.Cmd, id string) (_ terminalIO, err error) {
 	}
 	startup := windows.StartupInfoEx{}
 	startup.Cb = uint32(unsafe.Sizeof(startup))
+	// NULL standard handles plus STARTF_USESTDHANDLES let ConPTY supply its
+	// console handles. Without the flag, Windows can duplicate redirected
+	// service stdio into the child even with inheritHandles=false, bypassing
+	// the terminal stream (for example when the server logs to a file).
+	// https://github.com/microsoft/terminal/discussions/15814
+	startup.Flags = windows.STARTF_USESTDHANDLES
+	startup.StdInput, startup.StdOutput, startup.StdErr = 0, 0, 0
 	startup.ProcThreadAttributeList = attrs.List()
 	app, err := windows.UTF16PtrFromString(resolved)
 	if err != nil {

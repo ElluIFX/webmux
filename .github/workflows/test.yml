@@ -214,7 +214,9 @@ jobs:
           pnpm --dir web install --frozen-lockfile
           pnpm --dir web build
       - name: Native Windows runtime and race tests
-        run: go test -race -timeout 10m ./...
+        run: |
+          go test -race -timeout 10m ./... 2>&1 | Tee-Object -FilePath windows-go-test.log
+          exit $LASTEXITCODE
       - name: Vet native Windows backend
         run: go vet ./...
       - name: Frontend unit and browser tests
@@ -227,7 +229,7 @@ jobs:
       - name: Build standalone Windows binary
         env:
           CGO_ENABLED: "0"
-        run: go build -trimpath -o bin/webmux-windows-amd64.exe ./cmd/webmux
+        run: go build -trimpath -ldflags "-s -w -X main.version=v0.1.0-windows.${{ github.run_number }}" -o bin/webmux-windows-amd64.exe ./cmd/webmux
       - name: Preserve Windows binary and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -235,8 +237,60 @@ jobs:
           name: windows-native-results
           path: |
             bin/webmux-windows-amd64.exe
+            windows-go-test.log
             web/.vitest/attachments/
             web/playwright-report/
             web/test-results/
           if-no-files-found: ignore
           retention-days: 14
+
+  release-windows:
+    # Opt-in only: a deliberate release commit on the Windows branch. Ordinary
+    # pushes, PRs, forks, and failed platform tests cannot publish a release.
+    if: github.event_name == 'push' && github.repository == 'ElluIFX/webmux' && github.ref == 'refs/heads/windows' && contains(github.event.head_commit.message, '[release-windows]')
+    needs: [test, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: windows-release-${{ github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-native-results
+          path: release-input
+      - name: Package tested Windows executable
+        run: |
+          set -euo pipefail
+          mapfile -t binaries < <(find release-input -type f -name webmux-windows-amd64.exe)
+          test "${#binaries[@]}" -eq 1
+          binary="${binaries[0]}"
+          test -s "$binary"
+          mkdir -p release/package
+          cp "$binary" release/webmux-windows-amd64.exe
+          cp "$binary" release/package/webmux.exe
+          cp README.md release/package/README.md
+          cp docs/windows.md release/package/WINDOWS.md
+          cp docs/windows.md release/WINDOWS.md
+          (cd release/package && sha256sum webmux.exe > SHA256SUMS && zip -q ../webmux-windows-amd64.zip webmux.exe README.md WINDOWS.md SHA256SUMS)
+          (cd release && sha256sum webmux-windows-amd64.exe webmux-windows-amd64.zip > SHA256SUMS)
+      - name: Publish Windows prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: v0.1.0-windows.${{ github.run_number }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --target "$RELEASE_COMMIT" --prerelease \
+            --title "WebMux Windows preview $RELEASE_TAG" \
+            --notes "Native Windows amd64 preview. This commit passed native Windows Go race tests, vet, frontend unit/browser tests, and Windows browser smoke, plus the Linux/macOS test jobs before publication. See WINDOWS.md for setup, batch-launcher limitations, and security notes. ARM64 is not included in this runtime-validated release." \
+            release/webmux-windows-amd64.exe \
+            release/webmux-windows-amd64.zip \
+            release/SHA256SUMS \
+            release/WINDOWS.md
