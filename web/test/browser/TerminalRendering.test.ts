@@ -1275,6 +1275,14 @@ test("pending viewport reset after a theme change does not read a disposed rende
 });
 
 test("native long press selects wide text and dragging copies multiple lines without terminal input or keyboard", async () => {
+  // xterm's SelectionService joins lines using Browser.isWindows, which
+  // reads navigator.platform (not the backend or Node host platform).
+  const selectionEOL = ["Windows", "Win16", "Win32", "WinCE"].includes(
+    navigator.platform,
+  )
+    ? "\r\n"
+    : "\n";
+  const multilineSelection = `中文 tail${selectionEOL}second`;
   observeGlyphPixels(true);
   const { socket } = await openTerminal();
   socket.receive(1, "prefix 中文 tail\r\nsecond line");
@@ -1301,7 +1309,7 @@ test("native long press selects wide text and dragging copies multiple lines wit
         document.querySelector('[aria-label="Terminal selection"]')
           ?.textContent,
     )
-    .toBe("中文 tail\nsecond");
+    .toBe(multilineSelection);
   await page.getByRole("button", { name: "Copy selection" }).click();
   await expect
     .poll(
@@ -1309,7 +1317,7 @@ test("native long press selects wide text and dragging copies multiple lines wit
         document.querySelector('[aria-label="Copied terminal text"]')
           ?.textContent,
     )
-    .toBe("中文 tail\nsecond");
+    .toBe(multilineSelection);
   expect(inputText(socket)).toBe("");
   expect(document.activeElement).not.toBe(textarea);
   expect(focused).not.toHaveBeenCalled();
