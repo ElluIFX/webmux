@@ -71,7 +71,9 @@ export const test = base.extend<
     }
   },
   _isolation: [
-    async ({ request, page, server }, use, testInfo) => {
+    // Depend on workDir so this fixture closes and awaits all sessions before
+    // workDir's teardown removes a directory still held as a Windows process cwd.
+    async ({ request, page, server, workDir: _workDir }, use, testInfo) => {
       await cleanSessions(request);
       await cleanRepositories(request);
       const browserLogs: string[] = [];

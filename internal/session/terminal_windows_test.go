@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0magnet/xterm-go/vt"
 	"golang.org/x/sys/windows"
 )
 
@@ -347,4 +348,80 @@ func TestWindowsRedirectedParentHelper(t *testing.T) {
 		t.Fatalf("ConPTY lost child output: %q", s.Buffer())
 	}
 	fmt.Println("PARENT_CAPTURE_OK")
+}
+
+// Exercise the actual default shell, not only a Go console helper: PSReadLine
+// consumes console key records differently from a cooked stdin Read call.
+func TestWindowsPowerShellInteractiveInput(t *testing.T) {
+	shell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	s := newIdleSession(t, shell, "-NoLogo", "-NoExit")
+	attachWindowsTestPeer(t, s)
+	waitWindowsOutput(t, s, "> ")
+	// Separate writes reproduce the browser's per-key packet boundaries.
+	for _, key := range []byte("Write-Output ('NATIVE_' + 'POWERSHELL_READY')\r") {
+		if err := s.Write([]byte{key}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitWindowsOutput(t, s, "NATIVE_POWERSHELL_READY")
+	if err := s.Write([]byte("exit 29\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitWindowsExit(t, s, 29)
+}
+
+// This peer belongs only to the integration test. Production Preview must
+// never answer device queries: the controlling browser owns those replies.
+// Use the existing VT parser so split CSI requests and cursor coordinates
+// are handled correctly rather than inventing a fixed CPR for PowerShell.
+func attachWindowsTestPeer(t *testing.T, s *Session) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	sub := s.Attach()
+	options := vt.NewOptions()
+	options.Cols, options.Rows, options.Scrollback = 80, 24, 0
+	terminal := vt.NewTerminal(options)
+	terminal.OnData = func(reply string) {
+		if err := s.WriteInput(ctx, []byte(reply), true); err != nil && ctx.Err() == nil && !errors.Is(err, os.ErrClosed) {
+			t.Errorf("test terminal reply: %v", err)
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-sub.Slow:
+				t.Error("test terminal peer fell behind")
+				return
+			case frame := <-sub.Out:
+				if len(frame) == 0 {
+					continue
+				}
+				switch frame[0] {
+				case 0, 1:
+					terminal.Write(frame[1:])
+				case 3:
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { cancel(); <-done; s.Detach(sub) })
+}
+
+func TestWindowsTestPeerAnswersSplitDeviceQueries(t *testing.T) {
+	options := vt.NewOptions()
+	options.Cols, options.Rows = 80, 24
+	terminal := vt.NewTerminal(options)
+	var replies []string
+	terminal.OnData = func(reply string) { replies = append(replies, reply) }
+	for _, part := range []string{"\x1b[2;4H", "\x1b[", "6n", "\x1b[5", "n"} {
+		terminal.Write([]byte(part))
+	}
+	if len(replies) != 2 || replies[0] != "\x1b[2;4R" || replies[1] != "\x1b[0n" {
+		t.Fatalf("device replies: %q", replies)
+	}
 }
