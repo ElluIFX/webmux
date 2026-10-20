@@ -37,6 +37,14 @@
   import WorkspaceGroup from "../components/WorkspaceGroup.svelte";
   import AddRepositoryDialog from "../components/AddRepositoryDialog.svelte";
   import RemoveWorktreeDialog from "../components/RemoveWorktreeDialog.svelte";
+  import AddHomeWorktreesDialog from "../components/AddHomeWorktreesDialog.svelte";
+  import { homeWorktrees } from "../homeWorktrees.svelte";
+  import {
+    homeLayout,
+    pruneHomeWorktrees,
+    setPinned,
+    worktreeTitle,
+  } from "../homeWorktrees";
   import type { TerminalDrafts } from "../terminal-draft.svelte";
 
   let { drafts }: { drafts: TerminalDrafts } = $props();
@@ -59,6 +67,7 @@
   } | null>(null);
   let adding = $state(false);
   let removing = $state<Worktree | null>(null);
+  let curating = $state<Repository | null>(null);
   let unregistering = $state<Repository | null>(null);
   let unregisterOpen = $state(false);
   let unregisterBusy = $state(false);
@@ -164,13 +173,21 @@
   function counts(items: SessionInfo[]) {
     return `运行 ${items.filter((s) => s.status === "running" || s.status === "idle").length} · 等待 ${items.filter((s) => s.status === "waiting").length} · 退出 ${items.filter((s) => s.status === "exited").length}`;
   }
+  function pin(repositoryId: string, ids: string[], pinned: boolean) {
+    const repo = repositories.find((r) => r.id === repositoryId);
+    if (repo)
+      homeWorktrees.save(setPinned(homeWorktrees.value, repo, ids, pinned));
+  }
   async function refresh() {
     const generation = ++refreshGeneration;
     refreshing = true;
     repositoryError = "";
     try {
       const result = await api("/repositories", RepositoriesSchema);
-      if (!disposed && generation === refreshGeneration) repositories = result;
+      if (!disposed && generation === refreshGeneration) {
+        repositories = result;
+        homeWorktrees.save(pruneHomeWorktrees(homeWorktrees.value, result));
+      }
     } catch (err) {
       if (!disposed && generation === refreshGeneration)
         repositoryError = (err as Error).message;
@@ -413,6 +430,7 @@
             (s) =>
               !repo.worktrees.some((w) => w.id === s.workspace?.worktreeId),
           )}
+          {@const layout = homeLayout(homeWorktrees.value, repo, repoSessions)}
           <Collapsible.Root
             class="min-w-0 space-y-4"
             data-repository-id={repo.id}
@@ -443,6 +461,14 @@
                 disabled={repo.availability !== "available" || !gitReady}
                 onclick={() => start("new", repo.id)}>新建 worktree</Button
               >
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!layout.unpinned.length}
+                onclick={() => {
+                  curating = repo;
+                }}>添加已有 worktree</Button
+              >
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger
                   >{#snippet child({ props })}<Button
@@ -464,7 +490,8 @@
                 >
               </DropdownMenu.Root>
               <p class="w-full text-xs text-muted-foreground">
-                {repo.worktrees.length} 工作区 · {counts(repoSessions)}
+                主页 {layout.shown.length} / 共 {repo.worktrees.length} 工作区 ·
+                {counts(repoSessions)}
               </p>
               <p
                 class="w-full font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground"
@@ -487,22 +514,17 @@
                 </p>{/if}
             </div>
             <Collapsible.Content class="space-y-4">
-              {#each repo.worktrees
-                .filter((tree) => !filtering || repoSessions.some((session) => session.workspace?.worktreeId === tree.id))
-                .sort( (a, b) => (a.kind === "main" ? -1 : b.kind === "main" ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ) as tree (tree.id)}
+              {#each layout.shown.filter(({ tree }) => !filtering || repoSessions.some((session) => session.workspace?.worktreeId === tree.id)) as { tree, pinned } (tree.id)}
                 <WorkspaceGroup
-                  title={tree.branch ||
-                    (tree.detached
-                      ? `detached · ${tree.head?.slice(0, 12)}`
-                      : tree.kind === "bare"
-                        ? "Bare 仓库"
-                        : "尚无提交")}
+                  title={worktreeTitle(tree)}
                   path={tree.path}
                   worktree={tree}
                   sessions={repoSessions.filter(
                     (s) => s.workspace?.worktreeId === tree.id,
                   )}
                   {now}
+                  {pinned}
+                  ontogglepin={() => pin(repo.id, [tree.id], !pinned)}
                   onclose={(s) => {
                     closing = s;
                   }}
@@ -522,6 +544,12 @@
                     closing = s;
                   }}
                 />{/if}
+              {#if !layout.shown.length && layout.unpinned.length}<p
+                  class="text-sm text-muted-foreground"
+                >
+                  主页还没有 worktree。用「添加已有
+                  worktree」选择需要关注的工作区，或新建一个。
+                </p>{/if}
               {#if !repo.worktrees.length && !missing.length}<p
                   class="text-sm text-muted-foreground"
                 >
@@ -600,6 +628,7 @@
     initialRepositoryId={creating.repositoryId}
     initialWorktreeId={creating.worktreeId}
     onchange={refresh}
+    onworktreecreated={(tree) => pin(tree.repositoryId, [tree.id], true)}
     onclose={() => {
       creating = null;
     }}
@@ -625,6 +654,17 @@
     onchange={refresh}
     onclose={() => {
       removing = null;
+    }}
+  />{/if}
+{#if curating}<AddHomeWorktreesDialog
+    repositoryName={curating.name}
+    worktrees={homeLayout(homeWorktrees.value, curating, sessions).unpinned}
+    active={new Set(sessions.map((s) => s.workspace?.worktreeId ?? ""))}
+    onadd={(ids) => {
+      if (curating) pin(curating.id, ids, true);
+    }}
+    onclose={() => {
+      curating = null;
     }}
   />{/if}
 <AlertDialog.Root bind:open={unregisterOpen}>

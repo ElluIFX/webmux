@@ -16,6 +16,8 @@
     onclose,
     onstart,
     onremove,
+    pinned,
+    ontogglepin,
   }: {
     title: string;
     path?: string;
@@ -25,6 +27,9 @@
     onclose: (session: SessionInfo) => void;
     onstart?: () => void;
     onremove?: () => void;
+    // Undefined outside curated repository lists.
+    pinned?: boolean;
+    ontogglepin?: () => void;
   } = $props();
   const counts = $derived({
     running: sessions.filter(
@@ -67,7 +72,7 @@
         >运行 {counts.running} · 等待 {counts.waiting} · 退出 {counts.exited}</span
       >
     </Card.Description>
-    {#if onstart || onremove}
+    {#if onstart || onremove || ontogglepin}
       <Card.Action
         class="col-start-1 row-start-3 row-span-1 flex items-center gap-2 justify-self-start sm:col-start-2 sm:row-start-1 sm:row-span-2 sm:justify-self-end"
       >
@@ -78,7 +83,7 @@
               (!worktree.available || worktree.kind === "bare")}
             onclick={onstart}>启动会话</Button
           >{/if}
-        {#if onremove}
+        {#if onremove || ontogglepin}
           <DropdownMenu.Root>
             <DropdownMenu.Trigger>
               {#snippet child({ props })}
@@ -91,9 +96,13 @@
               {/snippet}
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end">
-              <DropdownMenu.Item variant="destructive" onSelect={onremove}
-                >删除 worktree</DropdownMenu.Item
-              >
+              {#if ontogglepin}<DropdownMenu.Item onSelect={ontogglepin}
+                  >{pinned ? "从主页移除" : "添加到主页"}</DropdownMenu.Item
+                >{/if}
+              {#if onremove}<DropdownMenu.Item
+                  variant="destructive"
+                  onSelect={onremove}>删除 worktree</DropdownMenu.Item
+                >{/if}
             </DropdownMenu.Content>
           </DropdownMenu.Root>
         {/if}
@@ -103,6 +112,7 @@
       <div class="col-span-full flex flex-wrap items-center gap-1.5">
         {#if worktree.kind === "main"}<Badge variant="secondary">主工作区</Badge
           >{/if}
+        {#if pinned === false}<Badge variant="outline">未添加到主页</Badge>{/if}
         {#if worktree.kind === "bare"}<Badge variant="secondary"
             >bare · 不可启动</Badge
           >{/if}
