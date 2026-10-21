@@ -215,13 +215,15 @@ jobs:
           pnpm --dir web build
       - name: Native Windows runtime and race tests
         run: |
-          go test -race -ldflags=-linkmode=external -timeout 10m ./... 2>&1 | Tee-Object -FilePath windows-go-test.log
+          go test -race -ldflags=-linkmode=external -parallel=4 -timeout 10m ./... 2>&1 | Tee-Object -FilePath windows-go-test.log
           exit $LASTEXITCODE
       - name: Vet native Windows backend
         run: go vet ./...
       - name: Install Chromium
         run: pnpm --dir web exec playwright install chromium
       - name: Native Windows browser end-to-end smoke
+        env:
+          WEBMUX_E2E_DIST: ${{ github.workspace }}/web/dist
         run: |
           pnpm --dir web exec playwright test --config playwright.config.ts windows.spec.ts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

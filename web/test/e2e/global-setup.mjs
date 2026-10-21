@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { cp, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const repoRoot = resolve(webRoot, "..");
+const windows = process.platform === "win32";
 
 async function build(command, args, cwd) {
   const child = spawn(command, args, {
     cwd,
-    detached: true,
+    detached: !windows,
+    windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -20,7 +22,16 @@ async function build(command, args, cwd) {
   const stop = () => {
     if (!child.pid) return;
     try {
-      process.kill(-child.pid, "SIGKILL");
+      if (windows) {
+        const result = spawnSync(
+          "taskkill.exe",
+          ["/PID", String(child.pid), "/T", "/F"],
+          { windowsHide: true, stdio: "ignore", timeout: 10_000 },
+        );
+        if (result.error || result.status !== 0) child.kill("SIGKILL");
+      } else {
+        process.kill(-child.pid, "SIGKILL");
+      }
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
@@ -46,7 +57,7 @@ export default async function globalSetup() {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "webmux-e2e-build-")),
   );
-  const binary = join(root, "webmux");
+  const binary = join(root, windows ? "webmux.exe" : "webmux");
   try {
     // Keep both the embed inputs and Go source snapshot private to this run.
     // A concurrent make web / E2E run may replace the checkout's web/dist.
