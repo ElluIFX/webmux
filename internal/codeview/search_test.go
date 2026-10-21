@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,17 +27,8 @@ func TestSearchUsesConstantGitCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := t.TempDir()
-	log := filepath.Join(bin, "calls")
-	script := fmt.Sprintf("#!/bin/sh\nprintf 'call\\n' >> %q\nexec %q \"$@\"\n", log, realGit)
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	log := filepath.Join(t.TempDir(), "calls")
+	installGitTestHelper(t, log, "")
 	for _, query := range []string{"absent", "dir-0999/file.txt"} {
 		if err := os.WriteFile(log, nil, 0600); err != nil {
 			t.Fatal(err)
@@ -54,7 +45,7 @@ func TestSearchUsesConstantGitCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 		count := strings.Count(string(calls), "\n")
-		if count > 8 {
+		if count == 0 || count > 8 {
 			t.Fatalf("search launched %d Git commands for 1000 directories", count)
 		}
 		t.Logf("%q: %d Git commands, %v", query, count, time.Since(start))
@@ -133,6 +124,9 @@ func TestSearchIgnoreRulesAndBoundaries(t *testing.T) {
 
 func TestSearchRawDirectoryNames(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames use UTF-16 and cannot represent invalid UTF-8 bytes")
+	}
 	s, id, root := setup(t)
 	if err := os.Mkdir(filepath.Join(root, "bad\xff"), 0700); errors.Is(err, syscall.EILSEQ) {
 		t.Skip("filesystem requires UTF-8 names")
@@ -162,19 +156,10 @@ func TestSearchReportsIgnoreIndexLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := t.TempDir()
-	records := filepath.Join(bin, "records")
+	records := filepath.Join(t.TempDir(), "records")
 	// A synthetic Git stream exercises both budgets without creating 100,000
 	// files or depending on the host's maximum pathname length.
-	script := fmt.Sprintf("#!/bin/sh\nfor arg do\n  if [ \"$arg\" = ls-files ]; then exec cat %q; fi\ndone\nexec %q \"$@\"\n", records, realGit)
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	installGitTestHelper(t, "", records)
 	for _, size := range []int{20, 600} {
 		var stream strings.Builder
 		for i := 0; i <= min(100000, MaxBytes/size+1); i++ {

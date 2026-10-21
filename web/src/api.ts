@@ -11,6 +11,7 @@ export class APIError extends Error {
   constructor(
     public status: number,
     message: string,
+    public code?: string,
   ) {
     super(message);
   }
@@ -34,7 +35,11 @@ export function store(key: string, value: string) {
 function responseError(status: number, body: unknown, fallback: string) {
   const detail = ErrorSchema.safeParse(body);
   if (status === 401) window.dispatchEvent(new Event("webmux:auth"));
-  return new APIError(status, detail.success ? detail.data.error : fallback);
+  return new APIError(
+    status,
+    detail.success ? detail.data.error : fallback,
+    detail.success ? detail.data.code : undefined,
+  );
 }
 
 async function request(

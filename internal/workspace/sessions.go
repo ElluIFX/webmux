@@ -174,11 +174,11 @@ func (s *Service) CreateSession(ctx context.Context, cwd, preset string, cmd, ar
 	}
 	path, err := canonical(cwd)
 	if err != nil {
-		return nil, problem(400, "directory: %v", err)
+		return nil, directoryProblem(err)
 	}
 	stat, err := os.Stat(path)
 	if err != nil {
-		return nil, problem(400, "directory: %v", err)
+		return nil, directoryProblem(err)
 	}
 	if !stat.IsDir() {
 		return nil, problem(400, "path is not a directory")

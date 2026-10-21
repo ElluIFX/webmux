@@ -52,8 +52,9 @@ func startTerminal(cmd *exec.Cmd, id string) (_ terminalIO, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if ext := strings.ToLower(filepath.Ext(resolved)); ext == ".cmd" || ext == ".bat" {
-		return nil, fmt.Errorf("Windows batch launcher %q cannot preserve argv safely: configure node.exe with the CLI's JavaScript entrypoint, or an executable preset", cmd.Path)
+	resolved, argv, err := windowsLauncher(resolved, cmd.Args)
+	if err != nil {
+		return nil, err
 	}
 	t := &windowsTerminal{changed: make(chan struct{})}
 	defer func() {
@@ -113,8 +114,8 @@ func startTerminal(cmd *exec.Cmd, id string) (_ terminalIO, err error) {
 	if err != nil {
 		return nil, err
 	}
-	quoted := make([]string, len(cmd.Args))
-	for i, arg := range cmd.Args {
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
 		quoted[i] = syscall.EscapeArg(arg)
 	}
 	line, err := windows.UTF16PtrFromString(strings.Join(quoted, " "))

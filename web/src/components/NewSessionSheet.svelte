@@ -166,8 +166,7 @@
         !makeDirectory &&
         err instanceof APIError &&
         err.status === 400 &&
-        err.message.startsWith("directory:") &&
-        err.message.includes("no such file or directory")
+        err.code === "directory_not_found"
       ) {
         mkdirOpen = true;
       } else error = (err as Error).message;

@@ -5,6 +5,7 @@ import {
   runCommand,
   expectTerminalLine,
 } from "./fixtures";
+import { join } from "node:path";
 
 // Actual native server + PowerShell + ConPTY + browser coverage, not a cross-build.
 test.skip(process.platform !== "win32", "Native Windows runtime smoke");
@@ -102,23 +103,36 @@ test("Windows PowerShell input, replay, upload, and exit", async ({
       page.locator(".terminal-header").getByRole("status"),
     ).toHaveText("已连接");
     await expectTerminalLine(page, "WINDOWS_CONPTY_READY");
-    const uploaded = await request.post(`/api/sessions/${id}/upload`, {
-      multipart: {
-        file: {
-          name: "native upload.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("WINDOWS_UPLOAD_OK"),
-        },
-      },
+    await page.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("Get-Content -LiteralPath ");
+    const data = await page.evaluateHandle(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(
+        new File(["WINDOWS_UPLOAD_OK"], "native upload.txt", {
+          type: "text/plain",
+        }),
+      );
+      return transfer;
     });
+    const response = page.waitForResponse((response) =>
+      response.url().endsWith(`/api/sessions/${id}/upload`),
+    );
+    await page
+      .locator(".terminal-host")
+      .dispatchEvent("drop", { dataTransfer: data });
+    const uploaded = await response;
     expect(uploaded.status()).toBe(201);
     const { path } = await uploaded.json();
     expect(path).toMatch(/^[A-Za-z]:\\/);
-    await runCommand(
-      page,
-      "Get-Content -LiteralPath '" + path.replaceAll("'", "''") + "'",
+    await expect(
+      page.getByRole("progressbar", { name: "文件上传进度" }),
+    ).toBeHidden();
+    await expect(page.locator(".xterm-rows")).toContainText(
+      "native upload.txt",
     );
+    await page.locator(".xterm-helper-textarea").press("Enter");
     await expectTerminalLine(page, "WINDOWS_UPLOAD_OK");
+    await data.dispose();
     await runCommand(page, "exit 7");
     await expect
       .poll(
@@ -132,4 +146,28 @@ test("Windows PowerShell input, replay, upload, and exit", async ({
       contentType: "application/json",
     });
   }
+});
+
+test("Windows direct launch offers creation of a missing directory", async ({
+  page,
+  request,
+  workDir,
+}) => {
+  const path = join(workDir, "new directory 中文");
+  await page.goto("/");
+  await page
+    .locator("header")
+    .getByRole("button", { name: "＋ 新建会话", exact: true })
+    .click();
+  await page.getByLabel("工作目录", { exact: true }).fill(path);
+  await page.getByRole("button", { name: "Shell", exact: true }).click();
+  await page.getByRole("button", { name: "创建并进入 →", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page
+    .getByRole("button", { name: "创建目录并启动", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/s\/[a-z0-9]+$/);
+  const sessions = await (await request.get("/api/sessions")).json();
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0]).toMatchObject({ cwd: path, workspace: null });
 });

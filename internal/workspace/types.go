@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/rainchan/webmux/internal/session"
@@ -19,11 +20,19 @@ const confirmationLifetime = 5 * time.Minute
 type Error struct {
 	Status  int
 	Message string
+	Code    string
 }
 
 func (e *Error) Error() string { return e.Message }
 func problem(status int, format string, args ...any) error {
-	return &Error{status, fmt.Sprintf(format, args...)}
+	return &Error{Status: status, Message: fmt.Sprintf(format, args...)}
+}
+func directoryProblem(err error) error {
+	e := &Error{Status: 400, Message: fmt.Sprintf("directory: %v", err)}
+	if errors.Is(err, os.ErrNotExist) {
+		e.Code = "directory_not_found"
+	}
+	return e
 }
 func Status(err error) int {
 	var e *Error

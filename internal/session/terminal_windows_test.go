@@ -22,10 +22,10 @@ import (
 
 // A native test executable avoids depending on Git Bash or PowerShell profiles.
 func TestWindowsTerminalHelper(t *testing.T) {
-	if os.Getenv("WEBMUX_SESSION_ID") == "" {
+	args := os.Args
+	if len(args) != 4 || args[1] != "-test.run=^TestWindowsTerminalHelper$" || args[2] != "--" {
 		return
 	}
-	args := os.Args
 	switch args[len(args)-1] {
 	case "flood":
 		for {
@@ -257,7 +257,11 @@ func TestWindowsResizeConcurrentWithCloseDrainsOutput(t *testing.T) {
 }
 
 func TestWindowsBatchLaunchersRequireExplicitExecutable(t *testing.T) {
-	for _, path := range []string{"cli.cmd", "cli.BAT"} {
+	for _, name := range []string{"cli.cmd", "cli.BAT"} {
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, []byte("@echo custom batch logic\r\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		cmd := &exec.Cmd{Path: path, Args: []string{path, "literal & argument"}}
 		if _, err := startTerminal(cmd, "batch-test"); err == nil || !strings.Contains(err.Error(), "node.exe") {
 			t.Fatalf("batch launcher %q: %v", path, err)

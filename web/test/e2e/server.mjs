@@ -6,13 +6,15 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 const windows = process.platform === "win32";
-const windowsShell = join(
-  process.env.SystemRoot || "C:\\Windows",
-  "System32",
-  "WindowsPowerShell",
-  "v1.0",
-  "powershell.exe",
-);
+const windowsShell =
+  process.env.WEBMUX_TEST_WINDOWS_SHELL ||
+  join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
 
 function signalChild(child, signal) {
   try {

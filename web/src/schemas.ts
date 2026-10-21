@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isAbsolutePath } from "./native-path";
 
 export const WorkspaceLinkSchema = z.object({
   repositoryId: z.string(),
@@ -185,8 +186,13 @@ export const RemovalPreviewSchema = z.object({
 });
 export type RemovalPreview = z.infer<typeof RemovalPreviewSchema>;
 export const DirectoriesSchema = z.array(z.string());
-export const ErrorSchema = z.object({ error: z.string() });
-export const UploadSchema = z.object({ path: z.string().startsWith("/") });
+export const ErrorSchema = z.object({
+  error: z.string(),
+  code: z.string().optional(),
+});
+export const UploadSchema = z.object({
+  path: z.string().refine(isAbsolutePath, "Expected an absolute server path"),
+});
 export const RecentDirsSchema = z
   .array(z.string())
   .transform((dirs) => dirs.slice(0, 10));

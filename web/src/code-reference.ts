@@ -24,8 +24,8 @@ export function codeReference(
   // double quotes still need to suppress shell substitutions.
   const path = isWindowsPath(doc.absolutePath)
     ? quotePath(doc.absolutePath, shellFlavor(command, doc.absolutePath))
-    // oxlint-disable-next-line no-control-regex -- Escape control bytes before sending paths to a terminal.
-    : /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(doc.absolutePath)
+    : // oxlint-disable-next-line no-control-regex -- Escape control bytes before sending paths to a terminal.
+      /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(doc.absolutePath)
       ? JSON.stringify(doc.absolutePath).replace(
           /[\x7f-\x9f\u2028\u2029$`]/g,
           (c) =>

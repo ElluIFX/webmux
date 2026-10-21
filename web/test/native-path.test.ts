@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { parseArgs } from "../src/api";
+import { UploadSchema } from "../src/schemas";
 import {
   displayPath,
   isWindowsPath,
@@ -22,6 +23,27 @@ describe("server-native paths", () => {
     expect(parentPath("//server/share/")).toBe("//server/share/");
     expect(displayPath("/unix/back\\slash")).toBe("/unix/back\\slash");
     expect(isWindowsPath("/unix/path")).toBe(false);
+    expect(parentPath("\\\\?\\C:\\Users\\")).toBe("C:/");
+    expect(pathRoot("\\\\?\\UNC\\server\\share\\dir")).toBe("//server/share/");
+  });
+  it("accepts native absolute upload paths and rejects relative paths", () => {
+    for (const path of [
+      "C:\\Temp\\file.txt",
+      "D:/file.txt",
+      "\\\\server\\share\\file.txt",
+      "/tmp/file.txt",
+      "\\\\?\\C:\\Temp\\file.txt",
+    ])
+      expect(UploadSchema.parse({ path }).path).toBe(path);
+    for (const path of [
+      "",
+      "relative.txt",
+      "C:relative.txt",
+      "\\rooted.txt",
+      "~\\file.txt",
+      "C:\\bad\x00path",
+    ])
+      expect(UploadSchema.safeParse({ path }).success).toBe(false);
   });
   it("preserves native backslashes in Windows argv without invoking a shell", () => {
     expect(
@@ -59,25 +81,29 @@ describe("server-native paths", () => {
         "v1.0",
         "powershell.exe",
       );
-      for (const path of [
+      const paths = [
         "C:\\work\\a'b",
         "C:\\work\\$(Write-Output INJECTED)",
         "C:\\work\\a`;whoami",
         "C:\\work\\a & b",
-      ]) {
-        expect(
+      ];
+      expect(
+        JSON.parse(
           execFileSync(
             powershell,
             [
               "-NoProfile",
               "-NonInteractive",
               "-Command",
-              "[Console]::Write(" + quotePath(path, "powershell") + ")",
+              "ConvertTo-Json -Compress @(" +
+                paths.map((path) => quotePath(path, "powershell")).join(",") +
+                ")",
             ],
-            { encoding: "utf8" },
+            { encoding: "utf8", timeout: 20_000 },
           ),
-        ).toBe(path);
-      }
+        ),
+      ).toEqual(paths);
     },
+    30_000,
   );
 });

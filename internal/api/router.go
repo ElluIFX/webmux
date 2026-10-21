@@ -67,7 +67,12 @@ func reply(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func failure(w http.ResponseWriter, status int, err error) {
-	reply(w, status, map[string]string{"error": err.Error()})
+	body := map[string]string{"error": err.Error()}
+	var detail *workspace.Error
+	if errors.As(err, &detail) && detail.Code != "" {
+		body["code"] = detail.Code
+	}
+	reply(w, status, body)
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 65536)
@@ -237,11 +242,14 @@ func (s *Server) dirs(w http.ResponseWriter, r *http.Request) {
 		if leftHidden != rightHidden {
 			return !leftHidden
 		}
+		if l, r := directoryNameKey(left), directoryNameKey(right); l != r {
+			return l < r
+		}
 		return left < right
 	})
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), base) {
+		if !strings.HasPrefix(directoryNameKey(entry.Name()), directoryNameKey(base)) {
 			continue
 		}
 		full := filepath.Join(dir, entry.Name())

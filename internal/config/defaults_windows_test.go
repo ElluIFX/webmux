@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -12,6 +13,10 @@ func TestWindowsDefaultsAndShellArguments(t *testing.T) {
 	t.Setenv("APPDATA", filepath.Join(home, "Roaming"))
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "Local"))
 	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", home)
+	t.Setenv("ProgramW6432", home)
+	t.Setenv("ProgramFiles", home)
+	t.Setenv("ProgramFiles(x86)", home)
 	if got := DefaultPath(); got != filepath.Join(home, "Roaming", "webmux", "config.toml") {
 		t.Fatal(got)
 	}
@@ -47,5 +52,42 @@ func TestWindowsDefaultsAndShellArguments(t *testing.T) {
 	}
 	if filepath.Base(c.Shell) != "powershell.exe" {
 		t.Fatal(c.Shell)
+	}
+}
+
+func TestWindowsPowerShellDiscovery(t *testing.T) {
+	root := t.TempDir()
+	other := t.TempDir()
+	writeShell := func(base, version string) string {
+		t.Helper()
+		path := filepath.Join(base, "PowerShell", version, "pwsh.exe")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	preview := writeShell(root, "10-preview")
+	if got := installedPowerShell([]string{"", root}); got != preview {
+		t.Fatalf("preview fallback: %q", got)
+	}
+	writeShell(root, "6")
+	stable := writeShell(root, "7")
+	writeShell(other, "7")
+	if got := installedPowerShell([]string{root, other}); got != stable {
+		t.Fatalf("stable native installation: %q", got)
+	}
+	writeShell(root, "7.9")
+	latest := writeShell(root, "7.10")
+	writeShell(root, "invalid")
+	if got := installedPowerShell([]string{root}); got != latest {
+		t.Fatalf("numeric version ordering: %q", got)
+	}
+	t.Setenv("PATH", filepath.Dir(stable))
+	t.Setenv("ProgramFiles", root)
+	if got := defaultShell(); got != stable {
+		t.Fatalf("PATH preference: %q", got)
 	}
 }

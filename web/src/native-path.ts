@@ -8,7 +8,15 @@ export function isWindowsPath(path: string): boolean {
   );
 }
 export function displayPath(path: string): string {
-  return isWindowsPath(path) ? path.replaceAll("\\", "/") : path;
+  if (!isWindowsPath(path)) return path;
+  const normalized = path.replaceAll("\\", "/");
+  if (/^\/\/\?\/UNC\//i.test(normalized)) return "//" + normalized.slice(8);
+  return normalized.replace(/^\/\/\?\/(?=[A-Za-z]:\/)/, "");
+}
+export function isAbsolutePath(path: string): boolean {
+  // oxlint-disable-next-line no-control-regex -- NUL cannot occur in a filesystem path.
+  if (/\x00/.test(path)) return false;
+  return path.startsWith("/") || isWindowsPath(path);
 }
 export function pathBasename(path: string): string {
   return displayPath(path).replace(/\/+$/, "").split("/").pop() || "/";
@@ -43,6 +51,7 @@ export function shellFlavor(
   return isWindowsPath(path) ? "powershell" : "posix";
 }
 export function quotePath(path: string, shell: ShellFlavor): string {
+  // oxlint-disable-next-line no-control-regex -- Reject terminal control sequences before insertion.
   if (/[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(path))
     throw new Error("路径含控制字符，无法安全插入终端");
   if (shell === "powershell" && /[\u2018-\u201e]/.test(path))
@@ -51,7 +60,7 @@ export function quotePath(path: string, shell: ShellFlavor): string {
   if (shell === "cmd") {
     // cmd expands percent variables and delayed !variables! even inside quotes.
     // Refuse ambiguous insertion rather than execute attacker-controlled text.
-    if (/[%!\"]/.test(path))
+    if (/[%!"]/.test(path))
       throw new Error(
         "此路径无法安全插入 cmd.exe，请使用 PowerShell 或手动复制路径",
       );

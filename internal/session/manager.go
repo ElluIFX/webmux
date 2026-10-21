@@ -89,7 +89,7 @@ func ExpandPath(path string) (string, error) {
 		}
 		path = filepath.Join(home, strings.TrimPrefix(path, "~"))
 	}
-	return filepath.Abs(path)
+	return absolutePath(path)
 }
 func (m *Manager) Create(cwd, preset string, cmd, args []string, name string) (*Session, error) {
 	if m.initErr != nil {

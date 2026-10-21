@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows]
   pull_request:
 
 permissions:
@@ -179,7 +179,7 @@ jobs:
   test-result:
     name: Test result
     if: always()
-    needs: [lint, go, vitest, storybook, e2e, macos]
+    needs: [lint, go, vitest, storybook, e2e, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -215,17 +215,22 @@ jobs:
           pnpm --dir web build
       - name: Native Windows runtime and race tests
         run: |
-          go test -race -timeout 10m ./... 2>&1 | Tee-Object -FilePath windows-go-test.log
+          go test -race -ldflags=-linkmode=external -timeout 10m ./... 2>&1 | Tee-Object -FilePath windows-go-test.log
           exit $LASTEXITCODE
       - name: Vet native Windows backend
         run: go vet ./...
       - name: Install Chromium
         run: pnpm --dir web exec playwright install chromium
       - name: Native Windows browser end-to-end smoke
-        run: pnpm --dir web exec playwright test --config playwright.config.ts windows.spec.ts
+        run: |
+          pnpm --dir web exec playwright test --config playwright.config.ts windows.spec.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:WEBMUX_TEST_WINDOWS_SHELL = (Get-Command pwsh.exe).Source
+          pnpm --dir web exec playwright test --config playwright.config.ts windows.spec.ts
       - name: Frontend unit and browser tests
         run: |
           pnpm --dir web test:unit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm --dir web test:browser
       - name: Build standalone Windows binary
         env:
@@ -249,7 +254,7 @@ jobs:
     # Opt-in only: a deliberate release commit on the Windows branch. Ordinary
     # pushes, PRs, forks, and failed platform tests cannot publish a release.
     if: github.event_name == 'push' && github.repository == 'ElluIFX/webmux' && github.ref == 'refs/heads/windows' && contains(github.event.head_commit.message, '[release-windows]')
-    needs: [test, windows]
+    needs: [test-result, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

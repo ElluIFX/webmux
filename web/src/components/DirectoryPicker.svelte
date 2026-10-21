@@ -66,6 +66,7 @@
     if (!open) return;
     const prefix = query;
     let active = true;
+    const controller = new AbortController();
     directories = [];
     selected = "";
     loading = true;
@@ -74,6 +75,9 @@
       void api(
         "/fs/dirs?prefix=" + encodeURIComponent(prefix),
         DirectoriesSchema,
+        "GET",
+        undefined,
+        controller.signal,
       )
         .then((result) => {
           if (active) directories = result;
@@ -87,6 +91,7 @@
     }, 150);
     return () => {
       active = false;
+      controller.abort();
       clearTimeout(timer);
     };
   });
